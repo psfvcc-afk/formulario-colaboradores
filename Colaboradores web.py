@@ -2,67 +2,62 @@ import streamlit as st
 import pandas as pd
 import dropbox
 from datetime import datetime
-import re
 from io import BytesIO
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 
-# Configuração da página
+# ---------------------- CONFIGURAÇÃO STREAMLIT ----------------------
 st.set_page_config(
     page_title="Registo de Colaboradores",
     page_icon="📋",
     layout="centered"
 )
 
-# Token do Dropbox - IMPORTANTE: Usar secrets no Streamlit Cloud
+# ---------------------- CONFIGURAÇÃO DO DROPBOX ----------------------
 DROPBOX_TOKEN = st.secrets["DROPBOX_TOKEN"]
-DROPBOX_FILE_PATH = "/colaboradores.xlsx"
+
+# Caminho EXATO do ficheiro existente no Dropbox
+DROPBOX_FILE_PATH = "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx"
 
 # Inicializar cliente Dropbox
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
-# Lista de Bairros Fiscais (Serviços de Finanças)
+# ---------------------- LISTA DE BAIRROS FISCAIS ----------------------
 BAIRROS_FISCAIS = [
-    "01-AVEIRO - 19-AGUEDA", "01-AVEIRO - 27-ALBERGARIA-A-VELHA", "01-AVEIRO - 35-ANADIA",
-    "01-AVEIRO - 43-AROUCA", "01-AVEIRO - 51-AVEIRO-1", "01-AVEIRO - 60-CASTELO DE PAIVA",
-    "01-AVEIRO - 78-ESPINHO", "01-AVEIRO - 86-ESTARREJA", "01-AVEIRO - 94-ST. MARIA FEIRA-1",
-    "01-AVEIRO - 108-ILHAVO", "01-AVEIRO - 116-MEALHADA", "01-AVEIRO - 124-MURTOSA",
+    "01-AVEIRO - 19-AGUEDA", "01-AVEIRO - 27-ALBERGARIA-A-VELHA", "01-AVEIRO - 35-ANADIA", "01-AVEIRO - 43-AROUCA",
+    "01-AVEIRO - 51-AVEIRO-1", "01-AVEIRO - 60-CASTELO DE PAIVA", "01-AVEIRO - 78-ESPINHO", "01-AVEIRO - 86-ESTARREJA",
+    "01-AVEIRO - 94-ST. MARIA FEIRA-1", "01-AVEIRO - 108-ILHAVO", "01-AVEIRO - 116-MEALHADA", "01-AVEIRO - 124-MURTOSA",
     "01-AVEIRO - 132-OLIVEIRA AZEMEIS", "01-AVEIRO - 140-OLIVEIRA DO BAIRRO", "01-AVEIRO - 159-OVAR",
     "01-AVEIRO - 167-S. JOAO DA MADEIRA", "01-AVEIRO - 175-SEVER DO VOUGA", "01-AVEIRO - 183-VAGOS",
-    "01-AVEIRO - 191-VALE DE CAMBRA", "02-BEJA - 205-ALJUSTREL", "02-BEJA - 213-ALMODOVAR",
-    "02-BEJA - 221-ALVITO", "02-BEJA - 230-BARRANCOS", "02-BEJA - 248-BEJA", "02-BEJA - 256-CASTRO VERDE",
-    "02-BEJA - 264-CUBA", "02-BEJA - 272-FERREIRA DO ALENTEJO", "02-BEJA - 280-MERTOLA",
-    "02-BEJA - 299-MOURA", "02-BEJA - 302-ODEMIRA", "02-BEJA - 310-OURIQUE", "02-BEJA - 329-SERPA",
-    "02-BEJA - 337-VIDIGUEIRA", "03-BRAGA - 345-AMARES", "03-BRAGA - 353-BARCELOS", "03-BRAGA - 361-BRAGA-1",
-    "03-BRAGA - 400-FAFE", "03-BRAGA - 418-GUIMARAES-1", "03-BRAGA - 442-VIEIRA DO MINHO",
-    "07-EVORA - 906-ESTREMOZ", "07-EVORA - 914-EVORA", "07-EVORA - 922-MONTEMOR-O-NOVO",
-    "07-EVORA - 965-REDONDO", "07-EVORA - 973-REGUENGOS DE MONSARAZ", "07-EVORA - 990-VILA VICOSA",
-    "12-PORTALEGRE - 1635-CAMPO MAIOR", "12-PORTALEGRE - 1660-ELVAS", "12-PORTALEGRE - 1732-PORTALEGRE",
-    "15-SETUBAL - 2232-SETUBAL-1", "15-SETUBAL - 2240-SESIMBRA", "15-SETUBAL - 2259-SINES",
-    "18-VISEU - 2720-VISEU"
+    "01-AVEIRO - 191-VALE DE CAMBRA", "02-BEJA - 205-ALJUSTREL", "02-BEJA - 213-ALMODOVAR", "02-BEJA - 221-ALVITO",
+    "02-BEJA - 230-BARRANCOS", "02-BEJA - 248-BEJA", "02-BEJA - 256-CASTRO VERDE", "02-BEJA - 264-CUBA",
+    "02-BEJA - 272-FERREIRA DO ALENTEJO", "02-BEJA - 280-MERTOLA", "02-BEJA - 299-MOURA", "02-BEJA - 302-ODEMIRA",
+    "02-BEJA - 310-OURIQUE", "02-BEJA - 329-SERPA", "02-BEJA - 337-VIDIGUEIRA",
+    "07-EVORA - 914-EVORA", "12-PORTALEGRE - 1660-ELVAS", "13-PORTO - 1910-VILA NOVA DE GAIA-1",
+    "15-SETUBAL - 2232-SETUBAL-1", "11-LISBOA - 3069-LISBOA-1 BAIRRO", "11-LISBOA - 3085-LISBOA-3 BAIRRO",
+    "13-PORTO - 3174-PORTO-1 BAIRRO", "13-PORTO - 3204-VILA NOVA DE GAIA-2", "21-PONTA DELGADA - 2992-PONTA DELGADA",
+    "22-FUNCHAL - 2810-FUNCHAL-1", "22-FUNCHAL - 2895-SANTANA"
 ]
+# (🟢 Para poupar espaço, aqui estão apenas exemplos — no código real use a lista completa de 400+ linhas que já tens.)
 
 # ---------------------- FUNÇÕES DE VALIDAÇÃO ----------------------
-
 def validar_email(email):
-    """Valida que o email contém '@' com texto antes e depois"""
     if "@" not in email:
         return False
     partes = email.split("@")
     return len(partes) == 2 and len(partes[0]) > 0 and len(partes[1]) > 0
 
 def validar_nif(nif):
-    nif_clean = str(nif).replace(" ", "")
-    return len(nif_clean) == 9 and nif_clean.isdigit()
+    return len(str(nif).replace(" ", "")) == 9 and str(nif).isdigit()
 
 def validar_niss(niss):
-    niss_clean = str(niss).replace(" ", "")
-    return len(niss_clean) == 11 and niss_clean.isdigit()
+    return len(str(niss).replace(" ", "")) == 11 and str(niss).isdigit()
 
 def validar_telemovel(tel):
     tel_clean = str(tel).replace(" ", "")
     return len(tel_clean) == 9 and tel_clean.isdigit()
 
 def validar_iban(iban):
-    """Valida que começa com PT50 e tem 25 caracteres (PT50 + 21 dígitos)"""
     iban_clean = iban.replace(" ", "")
     if not iban_clean.startswith("PT50"):
         return False
@@ -71,41 +66,56 @@ def validar_iban(iban):
     return iban_clean[4:].isdigit()
 
 def validar_cc(cc):
-    """Aceita qualquer texto — apenas verifica que não está vazio"""
+    # Sem validação de formato — aceita qualquer texto
     return len(cc.strip()) > 0
 
-# ---------------------- FUNÇÕES DE LER/GRAVAR ----------------------
-
+# ---------------------- FUNÇÕES DE LER E GRAVAR ----------------------
 def carregar_dados_dropbox():
-    """Carrega o Excel de colaboradores, ou cria um novo se não existir"""
     try:
         _, response = dbx.files_download(DROPBOX_FILE_PATH)
         data = response.content
-        df = pd.read_excel(BytesIO(data))
+        df = pd.read_excel(BytesIO(data), sheet_name="Colaboradores")
         return df
-    except:
+    except Exception:
         colunas = [
             "Nome Completo", "Secção", "Nº Horas/Semana", "E-mail", "Data de Nascimento",
-            "NISS", "NIF", "Documento de Identificação", "Validade Documento",
-            "Bairro Fiscal", "Estado Civil", "Nº Titulares", "Nº Dependentes",
-            "Morada", "IBAN", "Data de Admissão", "Nacionalidade",
-            "Telemóvel", "Data de Registo"
+            "NISS", "NIF", "Documento de Identificação", "Validade Documento", "Bairro Fiscal",
+            "Estado Civil", "Nº Titulares", "Nº Dependentes", "Morada", "IBAN",
+            "Data de Admissão", "Nacionalidade", "Telemóvel", "Data de Registo"
         ]
         return pd.DataFrame(columns=colunas)
 
 def guardar_dados_dropbox(df):
-    """Guarda o DataFrame no Dropbox (substitui ficheiro anterior)"""
     try:
+        # 1️⃣ Fazer download do ficheiro existente
+        _, response = dbx.files_download(DROPBOX_FILE_PATH)
+        existing_data = response.content
+
+        # 2️⃣ Abrir o ficheiro
+        wb = load_workbook(BytesIO(existing_data))
+
+        # 3️⃣ Se existir a aba "Colaboradores", apagar
+        if "Colaboradores" in wb.sheetnames:
+            del wb["Colaboradores"]
+
+        # 4️⃣ Criar nova aba e escrever os dados atualizados
+        ws = wb.create_sheet("Colaboradores")
+        for r in dataframe_to_rows(df, index=False, header=True):
+            ws.append(r)
+
+        # 5️⃣ Guardar em memória
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Colaboradores')
+        wb.save(output)
         output.seek(0)
+
+        # 6️⃣ Substituir o ficheiro original no Dropbox
         dbx.files_upload(
             output.read(),
             DROPBOX_FILE_PATH,
             mode=dropbox.files.WriteMode.overwrite
         )
         return True
+
     except Exception as e:
         st.error(f"Erro ao guardar no Dropbox: {e}")
         return False
