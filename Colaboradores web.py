@@ -63,27 +63,38 @@ def carregar_dados():
 
 def guardar_dados(df):
     try:
-        # tenta ler ficheiro existente
+        # Tentar descarregar o ficheiro existente da Dropbox
+        workbook = None
         try:
             _, response = dbx.files_download(DROPBOX_FILE_PATH)
-            wb = load_workbook(BytesIO(response.content))
+            workbook = load_workbook(BytesIO(response.content))
         except Exception:
-            wb = None
+            workbook = None
 
+        # Criar buffer em memória
         output = BytesIO()
+
+        # Escrever a folha "Colaboradores"
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            if wb:
-                writer.book = wb
-                writer.sheets = {ws.title: ws for ws in wb.worksheets}
+            if workbook:
+                writer.book = workbook
+                writer.sheets = {ws.title: ws for ws in workbook.worksheets}
             df.to_excel(writer, index=False, sheet_name="Colaboradores")
-            # garantir pelo menos uma folha visível
+
+            # Garantir que há pelo menos uma folha visível
             for ws in writer.book.worksheets:
                 ws.sheet_state = "visible"
-            writer.book.active = 0
-            writer.save()
+            writer.book.active = 0  # primeira aba visível
+
+        # Enviar para Dropbox
         output.seek(0)
-        dbx.files_upload(output.read(), DROPBOX_FILE_PATH, mode=dropbox.files.WriteMode.overwrite)
+        dbx.files_upload(
+            output.read(),
+            DROPBOX_FILE_PATH,
+            mode=dropbox.files.WriteMode.overwrite
+        )
         return True
+
     except Exception as e:
         st.error(f"Erro ao guardar no Dropbox: {e}")
         return False
