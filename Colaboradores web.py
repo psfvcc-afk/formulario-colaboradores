@@ -11,7 +11,7 @@ from openpyxl import load_workbook, Workbook
 st.set_page_config(page_title="Registo de Colaboradores", page_icon="📋", layout="centered")
 
 DROPBOX_TOKEN = st.secrets["DROPBOX_TOKEN"]
-DROPBOX_FILE_PATH = "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx"
+DROPBOX_FILE_PATH = "/Gestão Colaboradores.xlsx"
 
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
