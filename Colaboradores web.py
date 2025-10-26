@@ -408,9 +408,8 @@ def validar_iban(iban):
     return iban_clean[4:].isdigit()
 
 def validar_cc(cc):
-    # Formato: 12345678 0 ZW0
-    pattern = r'^\d{8}\s\d\s[A-Z]{2}\d$'
-    return re.match(pattern, cc) is not None or "passaporte" in cc.lower() or "residencia" in cc.lower()
+    # Sem validação de formato - aceita qualquer texto
+    return len(cc.strip()) > 0
 
 # Função para carregar dados existentes do Dropbox
 def carregar_dados_dropbox():
@@ -549,7 +548,7 @@ with st.form("formulario_colaborador"):
         if not telemovel or not validar_telemovel(telemovel):
             erros.append("Telemóvel deve ter 9 dígitos")
         if not doc_identificacao or not validar_cc(doc_identificacao):
-            erros.append("Documento de identificação em formato inválido")
+            erros.append("Documento de identificação é obrigatório")
         if not iban or not validar_iban(iban):
             erros.append("IBAN deve estar no formato PT50 seguido de 21 dígitos")
         if not morada or len(morada) < 10:
