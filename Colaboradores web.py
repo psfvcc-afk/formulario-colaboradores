@@ -189,9 +189,9 @@ with st.form("formulario_colaborador"):
         secao = st.selectbox(
             "Secção *",
             options=[
-                "Arc",
-                "Alcalá",
-                "Amoreira TA"
+                "Charcutaria/Lacticínios", "Frente de Loja", "Frutas e Vegetais",
+                "Gerência", "Não Perecíveis (reposição)", "Padaria e Take Away",
+                "Peixaria", "Quiosque", "Talho"
             ],
             help="Departamento ou secção do colaborador"
         )
