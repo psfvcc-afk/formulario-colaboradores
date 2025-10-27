@@ -13,14 +13,21 @@ st.set_page_config(
     layout="centered"
 )
 
-# ---------------------- CONFIGURAÇÃO DO DROPBOX ----------------------
-DROPBOX_TOKEN = st.secrets["DROPBOX_TOKEN"]
+# ---------------------- CONFIGURAÇÃO DO DROPBOX (ATUALIZADO COM OAUTH 2) ----------------------
+# 🔥 MUDANÇA: Usar OAuth 2 com refresh token em vez de access token direto
+DROPBOX_APP_KEY = st.secrets["DROPBOX_APP_KEY"]
+DROPBOX_APP_SECRET = st.secrets["DROPBOX_APP_SECRET"]
+DROPBOX_REFRESH_TOKEN = st.secrets["DROPBOX_REFRESH_TOKEN"]
 
 # Caminho EXATO do ficheiro existente no Dropbox
 DROPBOX_FILE_PATH = "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx"
 
-# Inicializar cliente Dropbox
-dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+# 🔥 MUDANÇA: Inicializar cliente Dropbox com OAuth 2
+dbx = dropbox.Dropbox(
+    app_key=DROPBOX_APP_KEY,
+    app_secret=DROPBOX_APP_SECRET,
+    oauth2_refresh_token=DROPBOX_REFRESH_TOKEN
+)
 
 # ---------------------- LISTA DE BAIRROS FISCAIS ----------------------
 BAIRROS_FISCAIS = [
@@ -38,7 +45,6 @@ BAIRROS_FISCAIS = [
     "13-PORTO - 3174-PORTO-1 BAIRRO", "13-PORTO - 3204-VILA NOVA DE GAIA-2", "21-PONTA DELGADA - 2992-PONTA DELGADA",
     "22-FUNCHAL - 2810-FUNCHAL-1", "22-FUNCHAL - 2895-SANTANA"
 ]
-# (🟢 Para poupar espaço, aqui estão apenas exemplos — no código real use a lista completa de 400+ linhas que já tens.)
 
 # ---------------------- FUNÇÕES DE VALIDAÇÃO ----------------------
 def validar_email(email):
@@ -66,7 +72,6 @@ def validar_iban(iban):
     return iban_clean[4:].isdigit()
 
 def validar_cc(cc):
-    # Sem validação de formato — aceita qualquer texto
     return len(cc.strip()) > 0
 
 # ---------------------- FUNÇÕES DE LER E GRAVAR ----------------------
@@ -87,28 +92,22 @@ def carregar_dados_dropbox():
 
 def guardar_dados_dropbox(df):
     try:
-        # 1️⃣ Fazer download do ficheiro existente
         _, response = dbx.files_download(DROPBOX_FILE_PATH)
         existing_data = response.content
 
-        # 2️⃣ Abrir o ficheiro
         wb = load_workbook(BytesIO(existing_data))
 
-        # 3️⃣ Se existir a aba "Colaboradores", apagar
         if "Colaboradores" in wb.sheetnames:
             del wb["Colaboradores"]
 
-        # 4️⃣ Criar nova aba e escrever os dados atualizados
         ws = wb.create_sheet("Colaboradores")
         for r in dataframe_to_rows(df, index=False, header=True):
             ws.append(r)
 
-        # 5️⃣ Guardar em memória
         output = BytesIO()
         wb.save(output)
         output.seek(0)
 
-        # 6️⃣ Substituir o ficheiro original no Dropbox
         dbx.files_upload(
             output.read(),
             DROPBOX_FILE_PATH,
@@ -119,12 +118,12 @@ def guardar_dados_dropbox(df):
     except Exception as e:
         st.error(f"Erro ao guardar no Dropbox: {e}")
         return False
+
 # ---------------------- INTERFACE STREAMLIT ----------------------
 
 st.title("📋 Registo de Colaboradores")
 st.markdown("---")
 
-# Formulário principal
 with st.form("formulario_colaborador"):
     st.subheader("Dados Pessoais")
 
@@ -190,9 +189,9 @@ with st.form("formulario_colaborador"):
         secao = st.selectbox(
             "Secção *",
             options=[
-                "Charcutaria/Lacticínios", "Frente de Loja", "Frutas e Vegetais",
-                "Gerência", "Não Perecíveis (reposição)", "Padaria e Take Away",
-                "Peixaria", "Quiosque", "Talho"
+                "Arc",
+                "Alcalá",
+                "Amoreira TA"
             ],
             help="Departamento ou secção do colaborador"
         )
@@ -216,7 +215,6 @@ with st.form("formulario_colaborador"):
 
     submitted = st.form_submit_button("✅ Submeter Registo", use_container_width=True)
 
-    # ---------------------- VALIDAÇÕES ----------------------
     if submitted:
         erros = []
 
@@ -239,7 +237,6 @@ with st.form("formulario_colaborador"):
         if not nacionalidade:
             erros.append("Nacionalidade é obrigatória")
 
-        # ---------------------- RESULTADOS ----------------------
         if erros:
             st.error("Por favor corrija os seguintes erros:")
             for erro in erros:
@@ -278,6 +275,5 @@ with st.form("formulario_colaborador"):
                 else:
                     st.error("❌ Erro ao guardar o registo. Tente novamente.")
 
-# Rodapé
 st.markdown("---")
 st.caption("Formulário de Registo de Colaboradores | Dados guardados de forma segura no Dropbox")
