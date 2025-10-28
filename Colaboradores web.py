@@ -6,6 +6,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 import calendar
+import time
 
 st.set_page_config(
     page_title="Processamento Salarial",
@@ -87,15 +88,21 @@ def check_password():
         return False
     return True
 
-# Função para carregar colaboradores
-def carregar_colaboradores(empresa):
-    try:
-        _, response = dbx.files_download(EMPRESAS[empresa]["path"])
-        df = pd.read_excel(BytesIO(response.content), sheet_name="Colaboradores")
-        return df
-    except Exception as e:
-        st.error(f"Erro ao carregar colaboradores: {e}")
-        return pd.DataFrame()
+# Função para carregar colaboradores (com cache opcional)
+def carregar_colaboradores(empresa, force_reload=False):
+    cache_key = f"df_colaboradores_{empresa}"
+    
+    if force_reload or cache_key not in st.session_state:
+        try:
+            _, response = dbx.files_download(EMPRESAS[empresa]["path"])
+            df = pd.read_excel(BytesIO(response.content), sheet_name="Colaboradores")
+            st.session_state[cache_key] = df
+            return df
+        except Exception as e:
+            st.error(f"Erro ao carregar colaboradores: {e}")
+            return pd.DataFrame()
+    
+    return st.session_state[cache_key]
 
 # Função para atualizar colaborador
 def atualizar_colaborador_dropbox(empresa, nome_colaborador, dados_atualizados):
@@ -233,7 +240,8 @@ if menu == "⚙️ Configurações":
             key="empresa_config"
         )
         
-        df_colab_config = carregar_colaboradores(empresa_config)
+        # Forçar reload dos dados
+        df_colab_config = carregar_colaboradores(empresa_config, force_reload=True)
         
         if not df_colab_config.empty:
             colaborador_config = st.selectbox(
@@ -245,6 +253,7 @@ if menu == "⚙️ Configurações":
             dados_atual = df_colab_config[df_colab_config['Nome Completo'] == colaborador_config].iloc[0]
             
             st.markdown("---")
+            st.info(f"📊 Valor atual: {dados_atual.get('Subsídio Alimentação Diário', 'N/A')}€")
             
             with st.form("form_editar_colab"):
                 st.markdown(f"### Editar: {colaborador_config}")
@@ -263,11 +272,17 @@ if menu == "⚙️ Configurações":
                         colaborador_config,
                         {'Subsídio Alimentação Diário': novo_sub_alim}
                     ):
-                        st.success("✅ Dados atualizados com sucesso!")
-                        st.info("💡 Volte ao Processamento e recarregue os dados do colaborador")
                         # Limpar cache para forçar reload
-                        if f"{empresa_config}_{colaborador_config}" in st.session_state:
-                            del st.session_state[f"{empresa_config}_{colaborador_config}"]
+                        cache_key = f"df_colaboradores_{empresa_config}"
+                        if cache_key in st.session_state:
+                            del st.session_state[cache_key]
+                        
+                        st.success("✅ Dados atualizados com sucesso!")
+                        st.info("🔄 Dados serão recarregados automaticamente no próximo acesso")
+                        
+                        # Recarregar dados para mostrar atualização
+                        time.sleep(1)
+                        st.rerun()
                     else:
                         st.error("❌ Erro ao atualizar dados")
 
@@ -301,8 +316,12 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # Carregar colaboradores
-    df_colaboradores = carregar_colaboradores(empresa_selecionada)
+    # Carregar colaboradores (forçar reload se vier das configurações)
+    force_reload = 'config_updated' in st.session_state and st.session_state.config_updated
+    if force_reload:
+        st.session_state.config_updated = False
+    
+    df_colaboradores = carregar_colaboradores(empresa_selecionada, force_reload=force_reload)
     
     if df_colaboradores.empty:
         st.warning("⚠️ Nenhum colaborador encontrado para esta empresa.")
@@ -318,7 +337,37 @@ elif menu == "💼 Processar Salários":
     dias_uteis_mes = calcular_dias_uteis(ano_selecionado, mes_selecionado, todos_feriados)
     num_dias_mes = calendar.monthrange(ano_selecionado, mes_selecionado)[1]
     
-    st.info(f"📊 {len(df_colaboradores)} colaboradores | 📅 {calendar.month_name[mes_selecionado]} {ano_selecionado}: {num_dias_mes} dias ({dias_uteis_mes} úteis)")
+    # Debug info (expansível)
+    with st.expander("🔍 Debug - Cálculo de Dias Úteis"):
+        st.write(f"**Mês:** {calendar.month_name[mes_selecionado]} {ano_selecionado}")
+        st.write(f"**Total dias:** {num_dias_mes}")
+        
+        # Contar fins de semana
+        sabados = domingos = 0
+        for dia in range(1, num_dias_mes + 1):
+            data = date(ano_selecionado, mes_selecionado, dia)
+            if data.weekday() == 5:
+                sabados += 1
+            elif data.weekday() == 6:
+                domingos += 1
+        
+        st.write(f"**Sábados:** {sabados}")
+        st.write(f"**Domingos:** {domingos}")
+        
+        # Feriados que caem em dias úteis
+        feriados_uteis = []
+        for feriado in todos_feriados:
+            if feriado.year == ano_selecionado and feriado.month == mes_selecionado:
+                if feriado.weekday() < 5:  # Segunda a sexta
+                    feriados_uteis.append(feriado)
+        
+        st.write(f"**Feriados em dias úteis:** {len(feriados_uteis)}")
+        for f in feriados_uteis:
+            st.write(f"  - {f.strftime('%d/%m/%Y')} ({['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'][f.weekday()]})")
+        
+        st.write(f"**Cálculo:** {num_dias_mes} - {sabados} - {domingos} - {len(feriados_uteis)} = **{dias_uteis_mes} dias úteis**")
+    
+    st.info(f"📊 {len(df_colaboradores)} colaboradores | 📅 {calendar.month_name[mes_selecionado]} {ano_selecionado}: {num_dias_mes} dias (**{dias_uteis_mes} úteis**)")
     
     # Selecionar colaborador
     st.subheader("👤 Selecionar Colaborador")
