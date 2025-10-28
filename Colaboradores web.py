@@ -329,10 +329,19 @@ elif menu == "💼 Processar Salários":
     # Inicializar dados se não existir
     if chave_dados not in st.session_state.dados_processamento:
         st.session_state.dados_processamento[chave_dados] = {
-            'faltas': [], 'ferias': [], 'baixas': [],
-            'sub_ferias': 'Duodécimos', 'sub_natal': 'Duodécimos',
-            'desconto_especie': False, 'h_extra': 0
+            'faltas_periodos': [],
+            'ferias_periodos': [],
+            'baixas_periodos': [],
+            'sub_ferias': 'Duodécimos',
+            'sub_natal': 'Duodécimos',
+            'desconto_especie': False,
+            'h_extra': 0.0,
+            'h_noturnas': 0.0,
+            'h_domingos': 0.0,
+            'h_feriados': 0.0
         }
+    
+    dados_salvos = st.session_state.dados_processamento[chave_dados]
     
     # Obter dados do colaborador
     dados_colab = df_colaboradores[df_colaboradores['Nome Completo'] == colaborador_selecionado].iloc[0]
