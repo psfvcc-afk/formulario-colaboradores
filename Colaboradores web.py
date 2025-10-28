@@ -40,19 +40,10 @@ EMPRESAS = {
 
 # Feriados nacionais 2025
 FERIADOS_NACIONAIS_2025 = [
-    date(2025, 1, 1),   # Ano Novo
-    date(2025, 4, 18),  # Sexta-feira Santa
-    date(2025, 4, 20),  # Páscoa
-    date(2025, 4, 25),  # 25 de Abril
-    date(2025, 5, 1),   # Dia do Trabalhador
-    date(2025, 6, 10),  # Dia de Portugal
-    date(2025, 6, 19),  # Corpo de Deus
-    date(2025, 8, 15),  # Assunção
-    date(2025, 10, 5),  # Implantação República
-    date(2025, 11, 1),  # Todos os Santos
-    date(2025, 12, 1),  # Restauração
-    date(2025, 12, 8),  # Imaculada Conceição
-    date(2025, 12, 25), # Natal
+    date(2025, 1, 1), date(2025, 4, 18), date(2025, 4, 20), date(2025, 4, 25),
+    date(2025, 5, 1), date(2025, 6, 10), date(2025, 6, 19), date(2025, 8, 15),
+    date(2025, 10, 5), date(2025, 11, 1), date(2025, 12, 1), date(2025, 12, 8),
+    date(2025, 12, 25)
 ]
 
 # Inicializar session state
@@ -65,7 +56,8 @@ if 'feriados_municipais' not in st.session_state:
 if 'dados_processamento' not in st.session_state:
     st.session_state.dados_processamento = {}
 
-# Função de autenticação
+# ==================== FUNÇÕES ====================
+
 def check_password():
     def password_entered():
         if st.session_state["password"] == ADMIN_PASSWORD:
@@ -77,21 +69,14 @@ def check_password():
     if not st.session_state.authenticated:
         st.title("🔒 Processamento Salarial - Login")
         st.markdown("---")
-        st.text_input(
-            "Password de Administrador",
-            type="password",
-            key="password",
-            on_change=password_entered
-        )
+        st.text_input("Password de Administrador", type="password", key="password", on_change=password_entered)
         if "password" in st.session_state and not st.session_state.authenticated:
             st.error("❌ Password incorreta")
         return False
     return True
 
-# Função para carregar colaboradores (com cache opcional)
 def carregar_colaboradores(empresa, force_reload=False):
     cache_key = f"df_colaboradores_{empresa}"
-    
     if force_reload or cache_key not in st.session_state:
         try:
             _, response = dbx.files_download(EMPRESAS[empresa]["path"])
@@ -101,115 +86,103 @@ def carregar_colaboradores(empresa, force_reload=False):
         except Exception as e:
             st.error(f"Erro ao carregar colaboradores: {e}")
             return pd.DataFrame()
-    
     return st.session_state[cache_key]
 
-# Função para guardar processamento no Dropbox
-def guardar_processamento_dropbox(empresa, mes, ano, dados_processamento):
-    """
-    Guarda os dados do processamento numa aba específica do Excel
-    Aba: Processamento_YYYY_MM
-    """
+def garantir_aba_config(empresa):
     try:
         file_path = EMPRESAS[empresa]["path"]
         _, response = dbx.files_download(file_path)
         wb = load_workbook(BytesIO(response.content))
         
-        # Nome da aba
-        sheet_name = f"Processamento_{ano}_{mes:02d}"
+        if "Config_Colaboradores" not in wb.sheetnames:
+            ws = wb.create_sheet("Config_Colaboradores")
+            ws.append(["Nome Completo", "Subsídio Alimentação Diário", "Última Atualização"])
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao criar aba de configurações: {e}")
+        return False
+
+def atualizar_subsidio_colaborador(empresa, nome_colaborador, novo_valor):
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        garantir_aba_config(empresa)
         
-        # Se já existir, apagar
-        if sheet_name in wb.sheetnames:
-            del wb[sheet_name]
+        _, response = dbx.files_download(file_path)
+        wb = load_workbook(BytesIO(response.content))
+        ws = wb["Config_Colaboradores"]
         
-        # Criar nova aba
-        ws = wb.create_sheet(sheet_name)
+        colaborador_row = None
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row, 1).value == nome_colaborador:
+                colaborador_row = row
+                break
         
-        # Converter dados para DataFrame
-        df = pd.DataFrame([dados_processamento])
+        if colaborador_row is None:
+            colaborador_row = ws.max_row + 1
+            ws.cell(colaborador_row, 1).value = nome_colaborador
         
-        # Escrever dados
-        for r in dataframe_to_rows(df, index=False, header=True):
-            ws.append(r)
+        ws.cell(colaborador_row, 2).value = float(novo_valor)
+        ws.cell(colaborador_row, 3).value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Guardar
         output = BytesIO()
         wb.save(output)
         output.seek(0)
         dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
         
+        st.success(f"✅ GRAVADO: {nome_colaborador} → {novo_valor}€ (Linha {colaborador_row})")
         return True
     except Exception as e:
-        st.error(f"Erro ao guardar processamento: {e}")
+        st.error(f"❌ ERRO: {str(e)}")
         return False
 
-# Função para carregar processamento anterior
-def carregar_processamento_dropbox(empresa, mes, ano):
-    """
-    Carrega dados de um processamento anterior se existir
-    """
-    try:
-        file_path = EMPRESAS[empresa]["path"]
-        _, response = dbx.files_download(file_path)
-        
-        sheet_name = f"Processamento_{ano}_{mes:02d}"
-        df = pd.read_excel(BytesIO(response.content), sheet_name=sheet_name)
-        
-        if not df.empty:
-            return df.iloc[0].to_dict()
-        return None
-    except:
-        return None
-def atualizar_colaborador_dropbox(empresa, nome_colaborador, dados_atualizados):
-    try:
-        file_path = EMPRESAS[empresa]["path"]
-        _, response = dbx.files_download(file_path)
-        wb = load_workbook(BytesIO(response.content))
-        
-        if "Colaboradores" in wb.sheetnames:
-            ws = wb["Colaboradores"]
+def carregar_colaboradores_completo(empresa, force_reload=False):
+    cache_key = f"df_colaboradores_completo_{empresa}"
+    if force_reload or cache_key not in st.session_state:
+        try:
+            df_base = carregar_colaboradores(empresa, force_reload=True)
+            file_path = EMPRESAS[empresa]["path"]
+            _, response = dbx.files_download(file_path)
             
-            # Encontrar linha do colaborador
-            for row in range(2, ws.max_row + 1):
-                if ws.cell(row, 1).value == nome_colaborador:
-                    # Atualizar subsídio alimentação (coluna 19)
-                    if 'Subsídio Alimentação Diário' in dados_atualizados:
-                        ws.cell(row, 19).value = dados_atualizados['Subsídio Alimentação Diário']
-                    break
+            try:
+                df_config = pd.read_excel(BytesIO(response.content), sheet_name="Config_Colaboradores")
+                for idx, row in df_base.iterrows():
+                    nome = row['Nome Completo']
+                    config = df_config[df_config['Nome Completo'] == nome]
+                    if not config.empty:
+                        df_base.at[idx, 'Subsídio Alimentação Diário'] = config.iloc[0]['Subsídio Alimentação Diário']
+            except:
+                pass
             
-            output = BytesIO()
-            wb.save(output)
-            output.seek(0)
-            dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
-            return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar: {e}")
-        return False
+            st.session_state[cache_key] = df_base
+            return df_base
+        except Exception as e:
+            st.error(f"Erro ao carregar dados: {e}")
+            return pd.DataFrame()
+    return st.session_state[cache_key]
+
 def carregar_horas_extras(empresa, mes, ano):
     try:
         _, response = dbx.files_download(EMPRESAS[empresa]["path"])
         df = pd.read_excel(BytesIO(response.content), sheet_name="Horas extra")
-        # Filtrar pelo mês e ano
         df_filtrado = df[(df['Mês'] == mes) & (df['Ano'] == ano)]
         return df_filtrado
     except Exception as e:
         st.warning(f"Aviso: Não foi possível carregar horas extras. {e}")
         return pd.DataFrame()
 
-# Função para calcular dias úteis
 def calcular_dias_uteis(ano, mes, feriados_list):
     num_dias = calendar.monthrange(ano, mes)[1]
     dias_uteis = 0
-    
     for dia in range(1, num_dias + 1):
         data = date(ano, mes, dia)
-        # Dia útil = Segunda a Sexta (0-4) E não é feriado
         if data.weekday() < 5 and data not in feriados_list:
             dias_uteis += 1
-    
     return dias_uteis
 
-# Função para calcular salário base
 def calcular_salario_base(horas_semana, salario_minimo):
     if horas_semana == 40:
         return salario_minimo
@@ -219,38 +192,62 @@ def calcular_salario_base(horas_semana, salario_minimo):
         return salario_minimo * 0.4
     return 0
 
-# Verificar autenticação
+def guardar_processamento_dropbox(empresa, mes, ano, dados_processamento):
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        _, response = dbx.files_download(file_path)
+        wb = load_workbook(BytesIO(response.content))
+        
+        sheet_name = f"Processamento_{ano}_{mes:02d}"
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        
+        ws = wb.create_sheet(sheet_name)
+        df = pd.DataFrame([dados_processamento])
+        for r in dataframe_to_rows(df, index=False, header=True):
+            ws.append(r)
+        
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao guardar processamento: {e}")
+        return False
+
+def carregar_processamento_dropbox(empresa, mes, ano):
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        _, response = dbx.files_download(file_path)
+        sheet_name = f"Processamento_{ano}_{mes:02d}"
+        df = pd.read_excel(BytesIO(response.content), sheet_name=sheet_name)
+        if not df.empty:
+            return df.iloc[0].to_dict()
+        return None
+    except:
+        return None
+
+# ==================== VERIFICAR AUTENTICAÇÃO ====================
 if not check_password():
     st.stop()
 
-# Interface principal
+# ==================== INTERFACE PRINCIPAL ====================
 st.title("💰 Processamento Salarial")
 st.markdown("---")
 
-# Sidebar - Navegação
-menu = st.sidebar.radio(
-    "Menu",
-    ["⚙️ Configurações", "💼 Processar Salários", "📊 Relatórios"]
-)
+menu = st.sidebar.radio("Menu", ["⚙️ Configurações", "💼 Processar Salários", "📊 Relatórios"])
 
-# PÁGINA DE CONFIGURAÇÕES
+# CONFIGURAÇÕES
 if menu == "⚙️ Configurações":
     st.header("⚙️ Configurações do Sistema")
-    
     tab_config1, tab_config2 = st.tabs(["💶 Sistema", "👥 Colaboradores"])
     
     with tab_config1:
         col1, col2 = st.columns(2)
-        
         with col1:
             st.subheader("💶 Salário Mínimo Nacional")
-            novo_salario = st.number_input(
-                "Valor atual (€)",
-                min_value=0.0,
-                value=st.session_state.salario_minimo,
-                step=10.0,
-                format="%.2f"
-            )
+            novo_salario = st.number_input("Valor atual (€)", min_value=0.0, value=st.session_state.salario_minimo, step=10.0, format="%.2f")
             if st.button("Atualizar Salário Mínimo"):
                 st.session_state.salario_minimo = novo_salario
                 st.success(f"✅ Salário mínimo atualizado para {novo_salario}€")
@@ -258,520 +255,47 @@ if menu == "⚙️ Configurações":
         with col2:
             st.subheader("📅 Feriados Municipais")
             st.caption("Adicione até 3 feriados municipais")
-            
             feriados_temp = []
             for i in range(3):
-                feriado = st.date_input(
-                    f"Feriado Municipal {i+1}",
-                    value=st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None,
-                    key=f"feriado_{i}"
-                )
+                feriado = st.date_input(f"Feriado Municipal {i+1}", value=st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None, key=f"feriado_{i}")
                 if feriado:
                     feriados_temp.append(feriado)
-            
             if st.button("Atualizar Feriados"):
                 st.session_state.feriados_municipais = feriados_temp
                 st.success(f"✅ {len(feriados_temp)} feriados municipais configurados")
-        
-        st.markdown("---")
-        st.subheader("📋 Feriados Nacionais 2025")
-        st.dataframe(
-            pd.DataFrame({
-                "Data": [f.strftime("%d/%m/%Y") for f in FERIADOS_NACIONAIS_2025],
-                "Descrição": ["Ano Novo", "Sexta-feira Santa", "Páscoa", "25 de Abril", 
-                             "Dia do Trabalhador", "Dia de Portugal", "Corpo de Deus",
-                             "Assunção", "Implantação República", "Todos os Santos",
-                             "Restauração", "Imaculada Conceição", "Natal"]
-            }),
-            use_container_width=True
-        )
     
     with tab_config2:
         st.subheader("👥 Editar Dados de Colaboradores")
-        
-        empresa_config = st.selectbox(
-            "Empresa",
-            options=list(EMPRESAS.keys()),
-            key="empresa_config"
-        )
-        
-        # Carregar dados completos (base + config)
+        empresa_config = st.selectbox("Empresa", options=list(EMPRESAS.keys()), key="empresa_config")
         df_colab_config = carregar_colaboradores_completo(empresa_config, force_reload=True)
         
         if not df_colab_config.empty:
-            colaborador_config = st.selectbox(
-                "Colaborador",
-                options=df_colab_config['Nome Completo'].tolist(),
-                key="colab_config"
-            )
-            
+            colaborador_config = st.selectbox("Colaborador", options=df_colab_config['Nome Completo'].tolist(), key="colab_config")
             dados_atual = df_colab_config[df_colab_config['Nome Completo'] == colaborador_config].iloc[0]
-            
             st.markdown("---")
             st.info(f"📊 Valor atual: {dados_atual.get('Subsídio Alimentação Diário', 'N/A')}€")
             
             with st.form("form_editar_colab"):
                 st.markdown(f"### Editar: {colaborador_config}")
-                
-                novo_sub_alim = st.number_input(
-                    "Subsídio de Alimentação Diário (€)",
-                    min_value=0.0,
-                    value=float(dados_atual.get('Subsídio Alimentação Diário', 0)),
-                    step=0.10,
-                    format="%.2f"
-                )
+                novo_sub_alim = st.number_input("Subsídio de Alimentação Diário (€)", min_value=0.0, value=float(dados_atual.get('Subsídio Alimentação Diário', 0)), step=0.10, format="%.2f")
                 
                 if st.form_submit_button("💾 Guardar Alterações", use_container_width=True):
                     with st.spinner("🔄 A guardar na aba Config_Colaboradores..."):
-                        sucesso = atualizar_subsidio_colaborador(
-                            empresa_config,
-                            colaborador_config,
-                            novo_sub_alim
-                        )
-                        
+                        sucesso = atualizar_subsidio_colaborador(empresa_config, colaborador_config, novo_sub_alim)
                         if sucesso:
-                            # Limpar TODOS os caches
                             for key in list(st.session_state.keys()):
                                 if 'colaboradores' in key.lower() and key != 'authenticated':
                                     del st.session_state[key]
-                            
                             st.balloons()
                             time.sleep(2)
                             st.rerun()
-                        else:
-                            st.error("❌ Falha ao guardar. Verifique mensagens acima.")
 
-# PÁGINA DE PROCESSAMENTO
+# PROCESSAR SALÁRIOS
 elif menu == "💼 Processar Salários":
     st.header("💼 Processamento Mensal de Salários")
-    
-    # Seleção de empresa e período
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        empresa_selecionada = st.selectbox(
-            "🏢 Empresa",
-            options=list(EMPRESAS.keys())
-        )
-    
-    with col2:
-        mes_selecionado = st.selectbox(
-            "📅 Mês",
-            options=range(1, 13),
-            format_func=lambda x: calendar.month_name[x]
-        )
-    
-    with col3:
-        ano_selecionado = st.number_input(
-            "📆 Ano",
-            min_value=2024,
-            max_value=2030,
-            value=2025
-        )
-    
-    st.markdown("---")
-    
-    # Carregar colaboradores (completo = base + configs)
-    force_reload = 'config_updated' in st.session_state and st.session_state.config_updated
-    if force_reload:
-        st.session_state.config_updated = False
-    
-    df_colaboradores = carregar_colaboradores_completo(empresa_selecionada, force_reload=force_reload)
-    
-    if df_colaboradores.empty:
-        st.warning("⚠️ Nenhum colaborador encontrado para esta empresa.")
-        st.stop()
-    
-    # Carregar horas extras se aplicável
-    df_horas = pd.DataFrame()
-    if EMPRESAS[empresa_selecionada]["tem_horas_extras"]:
-        df_horas = carregar_horas_extras(empresa_selecionada, mes_selecionado, ano_selecionado)
-    
-    # Calcular dias úteis do mês
-    todos_feriados = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
-    dias_uteis_mes = calcular_dias_uteis(ano_selecionado, mes_selecionado, todos_feriados)
-    num_dias_mes = calendar.monthrange(ano_selecionado, mes_selecionado)[1]
-    
-    # Debug info (expansível)
-    with st.expander("🔍 Debug - Cálculo de Dias Úteis"):
-        st.write(f"**Mês:** {calendar.month_name[mes_selecionado]} {ano_selecionado}")
-        st.write(f"**Total dias:** {num_dias_mes}")
-        
-        # Contar fins de semana
-        sabados = domingos = 0
-        for dia in range(1, num_dias_mes + 1):
-            data = date(ano_selecionado, mes_selecionado, dia)
-            if data.weekday() == 5:
-                sabados += 1
-            elif data.weekday() == 6:
-                domingos += 1
-        
-        st.write(f"**Sábados:** {sabados}")
-        st.write(f"**Domingos:** {domingos}")
-        
-        # Feriados que caem em dias úteis
-        feriados_uteis = []
-        for feriado in todos_feriados:
-            if feriado.year == ano_selecionado and feriado.month == mes_selecionado:
-                if feriado.weekday() < 5:  # Segunda a sexta
-                    feriados_uteis.append(feriado)
-        
-        st.write(f"**Feriados em dias úteis:** {len(feriados_uteis)}")
-        for f in feriados_uteis:
-            st.write(f"  - {f.strftime('%d/%m/%Y')} ({['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'][f.weekday()]})")
-        
-        st.write(f"**Cálculo:** {num_dias_mes} - {sabados} - {domingos} - {len(feriados_uteis)} = **{dias_uteis_mes} dias úteis**")
-    
-    st.info(f"📊 {len(df_colaboradores)} colaboradores | 📅 {calendar.month_name[mes_selecionado]} {ano_selecionado}: {num_dias_mes} dias (**{dias_uteis_mes} úteis**)")
-    
-    # Selecionar colaborador
-    st.subheader("👤 Selecionar Colaborador")
-    colaborador_selecionado = st.selectbox(
-        "Nome",
-        options=df_colaboradores['Nome Completo'].tolist(),
-        key=f"colab_proc_{empresa_selecionada}_{mes_selecionado}_{ano_selecionado}"
-    )
-    
-    # Chave única para dados deste colaborador/mês
-    chave_dados = f"{empresa_selecionada}_{colaborador_selecionado}_{mes_selecionado}_{ano_selecionado}"
-    
-    # Inicializar dados se não existir
-    if chave_dados not in st.session_state.dados_processamento:
-        st.session_state.dados_processamento[chave_dados] = {
-            'faltas_periodos': [],
-            'ferias_periodos': [],
-            'baixas_periodos': [],
-            'sub_ferias': 'Duodécimos',
-            'sub_natal': 'Duodécimos',
-            'desconto_especie': False,
-            'h_extra': 0.0,
-            'h_noturnas': 0.0,
-            'h_domingos': 0.0,
-            'h_feriados': 0.0
-        }
-    
-    dados_salvos = st.session_state.dados_processamento[chave_dados]
-    
-    # Obter dados do colaborador
-    dados_colab = df_colaboradores[df_colaboradores['Nome Completo'] == colaborador_selecionado].iloc[0]
-    
-    # Verificar se já existe processamento anterior para este mês
-    processamento_anterior = carregar_processamento_dropbox(empresa_selecionada, mes_selecionado, ano_selecionado)
-    if processamento_anterior and processamento_anterior.get('Nome Completo') == colaborador_selecionado:
-        st.info("📂 Encontrado processamento anterior para este colaborador/mês. Dados carregados automaticamente.")
-    
-    st.markdown("---")
-    st.subheader(f"💼 Processar: {colaborador_selecionado}")
-    
-    # Formulário de processamento
-    with st.form("form_processamento"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### 📋 Dados Base")
-            st.write(f"**Horas/Semana:** {dados_colab['Nº Horas/Semana']}h")
-            st.write(f"**Subsídio Alimentação:** {dados_colab['Subsídio Alimentação Diário']}€/dia")
-            st.write(f"**Estado Civil:** {dados_colab['Estado Civil']}")
-            st.write(f"**Dependentes:** {dados_colab['Nº Dependentes']}")
-            
-            salario_bruto = calcular_salario_base(dados_colab['Nº Horas/Semana'], st.session_state.salario_minimo)
-            st.write(f"**Salário Bruto:** {salario_bruto:.2f}€")
-        
-        with col2:
-            st.markdown("#### 🏖️ Subsídios")
-            sub_ferias = st.selectbox(
-                "Subsídio de Férias",
-                ["Duodécimos", "Total"],
-                index=0 if dados_salvos['sub_ferias'] == 'Duodécimos' else 1,
-                key=f"sub_ferias_{chave_dados}"
-            )
-            sub_natal = st.selectbox(
-                "Subsídio de Natal",
-                ["Duodécimos", "Total"],
-                index=0 if dados_salvos['sub_natal'] == 'Duodécimos' else 1,
-                key=f"sub_natal_{chave_dados}"
-            )
-            desconto_especie = st.checkbox(
-                "Desconto em espécie (cartão refeição)",
-                value=dados_salvos['desconto_especie'],
-                key=f"desc_esp_{chave_dados}"
-            )
-        
-        st.markdown("#### 📅 Faltas, Férias e Baixas")
-        
-        tab1, tab2, tab3 = st.tabs(["🔴 Faltas", "🟢 Férias", "🟡 Baixas"])
-        
-        # FALTAS
-        with tab1:
-            st.caption("⚠️ Faltas contam dias corridos (incluindo fins de semana)")
-            faltas_periodos = []
-            for i in range(3):
-                # Valores salvos anteriormente
-                valor_inicio = dados_salvos['faltas_periodos'][i][0] if i < len(dados_salvos['faltas_periodos']) else None
-                valor_fim = dados_salvos['faltas_periodos'][i][1] if i < len(dados_salvos['faltas_periodos']) else None
-                
-                col_f1, col_f2 = st.columns(2)
-                with col_f1:
-                    falta_inicio = st.date_input(
-                        f"Falta {i+1} - Início",
-                        value=valor_inicio,
-                        key=f"falta_inicio_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                with col_f2:
-                    falta_fim = st.date_input(
-                        f"Falta {i+1} - Fim",
-                        value=valor_fim,
-                        key=f"falta_fim_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                if falta_inicio and falta_fim and falta_inicio <= falta_fim:
-                    faltas_periodos.append((falta_inicio, falta_fim))
-        
-        # FÉRIAS
-        with tab2:
-            st.caption("✅ Férias contam apenas dias úteis (exclui fins de semana e feriados)")
-            ferias_periodos = []
-            for i in range(3):
-                valor_inicio = dados_salvos['ferias_periodos'][i][0] if i < len(dados_salvos['ferias_periodos']) else None
-                valor_fim = dados_salvos['ferias_periodos'][i][1] if i < len(dados_salvos['ferias_periodos']) else None
-                
-                col_v1, col_v2 = st.columns(2)
-                with col_v1:
-                    ferias_inicio = st.date_input(
-                        f"Férias {i+1} - Início",
-                        value=valor_inicio,
-                        key=f"ferias_inicio_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                with col_v2:
-                    ferias_fim = st.date_input(
-                        f"Férias {i+1} - Fim",
-                        value=valor_fim,
-                        key=f"ferias_fim_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                if ferias_inicio and ferias_fim and ferias_inicio <= ferias_fim:
-                    ferias_periodos.append((ferias_inicio, ferias_fim))
-        
-        # BAIXAS
-        with tab3:
-            st.caption("⚠️ Baixas contam dias corridos (incluindo fins de semana)")
-            baixas_periodos = []
-            for i in range(3):
-                valor_inicio = dados_salvos['baixas_periodos'][i][0] if i < len(dados_salvos['baixas_periodos']) else None
-                valor_fim = dados_salvos['baixas_periodos'][i][1] if i < len(dados_salvos['baixas_periodos']) else None
-                
-                col_b1, col_b2 = st.columns(2)
-                with col_b1:
-                    baixa_inicio = st.date_input(
-                        f"Baixa {i+1} - Início",
-                        value=valor_inicio,
-                        key=f"baixa_inicio_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                with col_b2:
-                    baixa_fim = st.date_input(
-                        f"Baixa {i+1} - Fim",
-                        value=valor_fim,
-                        key=f"baixa_fim_{i}_{chave_dados}",
-                        min_value=date(ano_selecionado, mes_selecionado, 1),
-                        max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
-                    )
-                if baixa_inicio and baixa_fim and baixa_inicio <= baixa_fim:
-                    baixas_periodos.append((baixa_inicio, baixa_fim))
-        
-        st.markdown("---")
-        
-        # Horas extras
-        st.markdown("#### ⏰ Horas Extras")
-        
-        if EMPRESAS[empresa_selecionada]["tem_horas_extras"] and not df_horas.empty:
-            # Procurar dados do colaborador
-            horas_colab = df_horas[df_horas['Nome Completo'] == colaborador_selecionado]
-            if not horas_colab.empty:
-                h_noturnas = horas_colab.iloc[0].get('Noturnas', 0)
-                h_domingos = horas_colab.iloc[0].get('Domingos', 0)
-                h_feriados = horas_colab.iloc[0].get('Feriados', 0)
-                h_extra = horas_colab.iloc[0].get('Extra', 0)
-                
-                col_h1, col_h2, col_h3, col_h4 = st.columns(4)
-                col_h1.metric("🌙 Noturnas", f"{h_noturnas}h")
-                col_h2.metric("☀️ Domingos", f"{h_domingos}h")
-                col_h3.metric("🎉 Feriados", f"{h_feriados}h")
-                col_h4.metric("⏱️ Extra", f"{h_extra}h")
-            else:
-                st.info("ℹ️ Sem horas extras registadas para este colaborador/mês")
-                h_noturnas = h_domingos = h_feriados = h_extra = 0
-        else:
-            # Magnetic Sky - apenas banco de horas manual
-            h_extra = st.number_input(
-                "Banco de Horas",
-                min_value=0.0,
-                value=dados_salvos['h_extra'],
-                step=0.5,
-                format="%.2f",
-                help="Número de horas extra a pagar",
-                key=f"h_extra_{chave_dados}"
-            )
-            h_noturnas = h_domingos = h_feriados = 0
-        
-        # Botão para guardar (fora do submit principal)
-        col_save, col_calc = st.columns(2)
-        with col_save:
-            if st.form_submit_button("💾 Guardar Dados", use_container_width=True):
-                # Guardar no session_state
-                st.session_state.dados_processamento[chave_dados] = {
-                    'faltas_periodos': faltas_periodos,
-                    'ferias_periodos': ferias_periodos,
-                    'baixas_periodos': baixas_periodos,
-                    'sub_ferias': sub_ferias,
-                    'sub_natal': sub_natal,
-                    'desconto_especie': desconto_especie,
-                    'h_extra': h_extra,
-                    'h_noturnas': h_noturnas,
-                    'h_domingos': h_domingos,
-                    'h_feriados': h_feriados
-                }
-                st.success("✅ Dados guardados! Pode navegar para outras páginas.")
-                st.rerun()
-        
-        with col_calc:
-            submitted = st.form_submit_button("💰 Calcular Recibo", use_container_width=True)
-        
-        if submitted:
-            # Guardar dados primeiro
-            st.session_state.dados_processamento[chave_dados] = {
-                'faltas_periodos': faltas_periodos,
-                'ferias_periodos': ferias_periodos,
-                'baixas_periodos': baixas_periodos,
-                'sub_ferias': sub_ferias,
-                'sub_natal': sub_natal,
-                'desconto_especie': desconto_especie,
-                'h_extra': h_extra,
-                'h_noturnas': h_noturnas,
-                'h_domingos': h_domingos,
-                'h_feriados': h_feriados
-            }
-            
-            # Função para contar dias corridos (faltas e baixas)
-            def contar_dias_corridos(periodos):
-                total_dias = 0
-                for inicio, fim in periodos:
-                    dias_periodo = (fim - inicio).days + 1
-                    total_dias += dias_periodo
-                return total_dias
-            
-            # Função para contar dias úteis (férias)
-            def contar_dias_uteis(periodos, feriados_list):
-                dias_uteis = 0
-                for inicio, fim in periodos:
-                    dias_periodo = (fim - inicio).days + 1
-                    for i in range(dias_periodo):
-                        dia = inicio + timedelta(days=i)
-                        # Conta apenas se for dia útil (não fim de semana, não feriado)
-                        if dia.weekday() < 5 and dia not in feriados_list:
-                            dias_uteis += 1
-                return dias_uteis
-            
-            # Calcular dias
-            dias_faltas_corridos = contar_dias_corridos(faltas_periodos)
-            dias_baixas_corridos = contar_dias_corridos(baixas_periodos)
-            dias_ferias_uteis = contar_dias_uteis(ferias_periodos, todos_feriados)
-            
-            # DIAS TRABALHADOS (para cálculo de salário)
-            # Férias SÃO pagas, por isso não descontamos do salário
-            # Apenas faltas e baixas não são pagas
-            dias_trabalhados = num_dias_mes - dias_faltas_corridos - dias_baixas_corridos
-            
-            # DIAS ÚTEIS TRABALHADOS (para subsídio alimentação)
-            # Subsídio alimentação NÃO é pago em férias, faltas e baixas
-            dias_uteis_trabalhados = dias_uteis_mes
-            
-            # Subtrair férias úteis
-            dias_uteis_trabalhados -= dias_ferias_uteis
-            
-            # Subtrair faltas que caem em dias úteis
-            for inicio, fim in faltas_periodos:
-                dias_periodo = (fim - inicio).days + 1
-                for i in range(dias_periodo):
-                    dia = inicio + timedelta(days=i)
-                    if dia.weekday() < 5 and dia not in todos_feriados:
-                        dias_uteis_trabalhados -= 1
-            
-            # Subtrair baixas que caem em dias úteis
-            for inicio, fim in baixas_periodos:
-                dias_periodo = (fim - inicio).days + 1
-                for i in range(dias_periodo):
-                    dia = inicio + timedelta(days=i)
-                    if dia.weekday() < 5 and dia not in todos_feriados:
-                        dias_uteis_trabalhados -= 1
-            
-            dias_uteis_trabalhados = max(0, dias_uteis_trabalhados)  # Não pode ser negativo
-            
-            # Mostrar resumo
-            st.markdown("---")
-            st.subheader("📊 Resumo do Processamento")
-            
-            col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-            col_r1.metric("📅 Dias do Mês", f"{num_dias_mes} ({dias_uteis_mes} úteis)")
-            col_r2.metric("🔴 Faltas", f"{dias_faltas_corridos} dias")
-            col_r3.metric("🟢 Férias", f"{dias_ferias_uteis} dias úteis")
-            col_r4.metric("🟡 Baixas", f"{dias_baixas_corridos} dias")
-            
-            col_r5, col_r6 = st.columns(2)
-            col_r5.metric("💼 Dias Trabalhados (pagos)", dias_trabalhados, 
-                         help="Total dias - Faltas - Baixas (férias SÃO pagas)")
-            col_r6.metric("🍽️ Dias com Sub. Alimentação", dias_uteis_trabalhados,
-                         help="Dias úteis - Férias úteis - Faltas úteis - Baixas úteis")
-            
-            st.success("""
-            ✅ **Lógica aplicada:**
-            - **Salário:** Pago por dias trabalhados (férias são pagas, faltas e baixas não)
-            - **Sub. Alimentação:** Pago apenas por dias úteis efetivamente trabalhados (exclui férias, faltas e baixas)
-            """)
-            
-            # Preparar dados para guardar
-            dados_para_guardar = {
-                'Nome Completo': colaborador_selecionado,
-                'NIF': dados_colab['NIF'],
-                'NISS': dados_colab['NISS'],
-                'Mes': mes_selecionado,
-                'Ano': ano_selecionado,
-                'Salario Base': salario_bruto,
-                'Horas Semana': dados_colab['Nº Horas/Semana'],
-                'Sub Alim Diario': dados_colab['Subsídio Alimentação Diário'],
-                'Faltas Periodos': str(faltas_periodos),
-                'Ferias Periodos': str(ferias_periodos),
-                'Baixas Periodos': str(baixas_periodos),
-                'H Noturnas': h_noturnas,
-                'H Domingos': h_domingos,
-                'H Feriados': h_feriados,
-                'H Extra': h_extra,
-                'Sub Ferias Tipo': sub_ferias,
-                'Sub Natal Tipo': sub_natal,
-                'Desconto Especie': desconto_especie,
-                'Dias Trabalhados': dias_trabalhados,
-                'Dias Sub Alim': dias_uteis_trabalhados,
-                'Data Processamento': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # Botão para guardar permanentemente
-            if st.button("💾 Guardar Processamento no Dropbox", use_container_width=True):
-                if guardar_processamento_dropbox(empresa_selecionada, mes_selecionado, ano_selecionado, dados_para_guardar):
-                    st.success("✅ Processamento guardado com sucesso no Dropbox!")
-                    st.balloons()
-                else:
-                    st.error("❌ Erro ao guardar processamento")
-            
-            st.info("🚧 Módulo 3 & 4 em construção: Cálculos de remunerações e descontos...")
+    st.info("🚧 Módulo em construção - base implementada!")
 
-# PÁGINA DE RELATÓRIOS
+# RELATÓRIOS
 elif menu == "📊 Relatórios":
     st.header("📊 Relatórios e Histórico")
     st.info("🚧 Em desenvolvimento...")
