@@ -104,7 +104,62 @@ def carregar_colaboradores(empresa, force_reload=False):
     
     return st.session_state[cache_key]
 
-# Função para atualizar colaborador
+# Função para guardar processamento no Dropbox
+def guardar_processamento_dropbox(empresa, mes, ano, dados_processamento):
+    """
+    Guarda os dados do processamento numa aba específica do Excel
+    Aba: Processamento_YYYY_MM
+    """
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        _, response = dbx.files_download(file_path)
+        wb = load_workbook(BytesIO(response.content))
+        
+        # Nome da aba
+        sheet_name = f"Processamento_{ano}_{mes:02d}"
+        
+        # Se já existir, apagar
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        
+        # Criar nova aba
+        ws = wb.create_sheet(sheet_name)
+        
+        # Converter dados para DataFrame
+        df = pd.DataFrame([dados_processamento])
+        
+        # Escrever dados
+        for r in dataframe_to_rows(df, index=False, header=True):
+            ws.append(r)
+        
+        # Guardar
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+        
+        return True
+    except Exception as e:
+        st.error(f"Erro ao guardar processamento: {e}")
+        return False
+
+# Função para carregar processamento anterior
+def carregar_processamento_dropbox(empresa, mes, ano):
+    """
+    Carrega dados de um processamento anterior se existir
+    """
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        _, response = dbx.files_download(file_path)
+        
+        sheet_name = f"Processamento_{ano}_{mes:02d}"
+        df = pd.read_excel(BytesIO(response.content), sheet_name=sheet_name)
+        
+        if not df.empty:
+            return df.iloc[0].to_dict()
+        return None
+    except:
+        return None
 def atualizar_colaborador_dropbox(empresa, nome_colaborador, dados_atualizados):
     try:
         file_path = EMPRESAS[empresa]["path"]
@@ -400,6 +455,11 @@ elif menu == "💼 Processar Salários":
     # Obter dados do colaborador
     dados_colab = df_colaboradores[df_colaboradores['Nome Completo'] == colaborador_selecionado].iloc[0]
     
+    # Verificar se já existe processamento anterior para este mês
+    processamento_anterior = carregar_processamento_dropbox(empresa_selecionada, mes_selecionado, ano_selecionado)
+    if processamento_anterior and processamento_anterior.get('Nome Completo') == colaborador_selecionado:
+        st.info("📂 Encontrado processamento anterior para este colaborador/mês. Dados carregados automaticamente.")
+    
     st.markdown("---")
     st.subheader(f"💼 Processar: {colaborador_selecionado}")
     
@@ -636,8 +696,16 @@ elif menu == "💼 Processar Salários":
             # Subtrair férias úteis
             dias_uteis_trabalhados -= dias_ferias_uteis
             
-            # Subtrair faltas e baixas que caem em dias úteis
-            for inicio, fim in faltas_periodos + baixas_periodos:
+            # Subtrair faltas que caem em dias úteis
+            for inicio, fim in faltas_periodos:
+                dias_periodo = (fim - inicio).days + 1
+                for i in range(dias_periodo):
+                    dia = inicio + timedelta(days=i)
+                    if dia.weekday() < 5 and dia not in todos_feriados:
+                        dias_uteis_trabalhados -= 1
+            
+            # Subtrair baixas que caem em dias úteis
+            for inicio, fim in baixas_periodos:
                 dias_periodo = (fim - inicio).days + 1
                 for i in range(dias_periodo):
                     dia = inicio + timedelta(days=i)
@@ -660,13 +728,46 @@ elif menu == "💼 Processar Salários":
             col_r5.metric("💼 Dias Trabalhados (pagos)", dias_trabalhados, 
                          help="Total dias - Faltas - Baixas (férias SÃO pagas)")
             col_r6.metric("🍽️ Dias com Sub. Alimentação", dias_uteis_trabalhados,
-                         help="Dias úteis - Férias - Faltas úteis - Baixas úteis")
+                         help="Dias úteis - Férias úteis - Faltas úteis - Baixas úteis")
             
             st.success("""
             ✅ **Lógica aplicada:**
             - **Salário:** Pago por dias trabalhados (férias são pagas, faltas e baixas não)
             - **Sub. Alimentação:** Pago apenas por dias úteis efetivamente trabalhados (exclui férias, faltas e baixas)
             """)
+            
+            # Preparar dados para guardar
+            dados_para_guardar = {
+                'Nome Completo': colaborador_selecionado,
+                'NIF': dados_colab['NIF'],
+                'NISS': dados_colab['NISS'],
+                'Mes': mes_selecionado,
+                'Ano': ano_selecionado,
+                'Salario Base': salario_bruto,
+                'Horas Semana': dados_colab['Nº Horas/Semana'],
+                'Sub Alim Diario': dados_colab['Subsídio Alimentação Diário'],
+                'Faltas Periodos': str(faltas_periodos),
+                'Ferias Periodos': str(ferias_periodos),
+                'Baixas Periodos': str(baixas_periodos),
+                'H Noturnas': h_noturnas,
+                'H Domingos': h_domingos,
+                'H Feriados': h_feriados,
+                'H Extra': h_extra,
+                'Sub Ferias Tipo': sub_ferias,
+                'Sub Natal Tipo': sub_natal,
+                'Desconto Especie': desconto_especie,
+                'Dias Trabalhados': dias_trabalhados,
+                'Dias Sub Alim': dias_uteis_trabalhados,
+                'Data Processamento': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Botão para guardar permanentemente
+            if st.button("💾 Guardar Processamento no Dropbox", use_container_width=True):
+                if guardar_processamento_dropbox(empresa_selecionada, mes_selecionado, ano_selecionado, dados_para_guardar):
+                    st.success("✅ Processamento guardado com sucesso no Dropbox!")
+                    st.balloons()
+                else:
+                    st.error("❌ Erro ao guardar processamento")
             
             st.info("🚧 Módulo 3 & 4 em construção: Cálculos de remunerações e descontos...")
 
