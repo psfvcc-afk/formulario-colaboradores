@@ -747,9 +747,9 @@ elif menu == "💼 Processar Salários":
     st.subheader("🏖️ Faltas e Baixas")
     col1, col2 = st.columns(2)
     with col1:
-        total_dias_faltas = st.number_input("Total Dias Faltas", min_value=0, value=0)
+        total_dias_faltas = st.number_input("Total Dias Faltas", min_value=0, value=0, key="faltas_input")
     with col2:
-        total_dias_baixas = st.number_input("Total Dias Baixas", min_value=0, value=0)
+        total_dias_baixas = st.number_input("Total Dias Baixas", min_value=0, value=0, key="baixas_input")
     
     st.markdown("---")
     
@@ -757,26 +757,60 @@ elif menu == "💼 Processar Salários":
     st.subheader("⏰ Horas Extras")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        horas_noturnas = st.number_input("🌙 Noturnas", min_value=0.0, value=0.0, step=0.5)
+        horas_noturnas = st.number_input("🌙 Noturnas", min_value=0.0, value=0.0, step=0.5, key="noturnas_input")
     with col2:
-        horas_domingos = st.number_input("📅 Domingos", min_value=0.0, value=0.0, step=0.5)
+        horas_domingos = st.number_input("📅 Domingos", min_value=0.0, value=0.0, step=0.5, key="domingos_input")
     with col3:
-        horas_feriados = st.number_input("🎉 Feriados", min_value=0.0, value=0.0, step=0.5)
+        horas_feriados = st.number_input("🎉 Feriados", min_value=0.0, value=0.0, step=0.5, key="feriados_input")
     with col4:
-        horas_extra = st.number_input("⚡ Extra", min_value=0.0, value=0.0, step=0.5)
+        horas_extra = st.number_input("⚡ Extra", min_value=0.0, value=0.0, step=0.5, key="extra_input")
     
     st.markdown("---")
     
-    outros_proveitos = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0)
+    outros_proveitos = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0, key="outros_input")
     
     st.markdown("---")
     
-    # CALCULAR
-    data_admissao = pd.to_datetime(snapshot_proc.get('Data de Admissão', date.today())).date()
-    dias_trabalhados = calcular_dias_trabalhados_com_admissao(
-        mes_proc, ano_proc, data_admissao, total_dias_faltas, total_dias_baixas
-    )
+    # CALCULAR DIAS TRABALHADOS
+    dias_no_mes = calendar.monthrange(ano_proc, mes_proc)[1]
+    
+    # Verificar data de admissão
+    try:
+        data_admissao_str = snapshot_proc.get('Data de Admissão', '')
+        if data_admissao_str and data_admissao_str != '':
+            data_admissao = pd.to_datetime(data_admissao_str).date()
+        else:
+            data_admissao = date(ano_proc, mes_proc, 1)  # Assume início do mês se não tem data
+    except:
+        data_admissao = date(ano_proc, mes_proc, 1)
+    
+    # Calcular dias disponíveis (considerando admissão)
+    if data_admissao.month == mes_proc and data_admissao.year == ano_proc:
+        # Admitido durante o mês
+        primeiro_dia_trabalho = data_admissao.day
+        dias_disponiveis = dias_no_mes - primeiro_dia_trabalho + 1
+        st.info(f"ℹ️ Colaborador admitido em {data_admissao.strftime('%d/%m/%Y')} - {dias_disponiveis} dias disponíveis no mês")
+    else:
+        # Já estava na empresa
+        dias_disponiveis = dias_no_mes
+    
+    # Calcular dias efetivamente trabalhados
+    dias_trabalhados = dias_disponiveis - total_dias_faltas - total_dias_baixas
+    dias_trabalhados = max(dias_trabalhados, 0)
+    
+    # Dias úteis trabalhados
     dias_uteis_trabalhados = max(dias_uteis_mes - total_dias_faltas - total_dias_baixas, 0)
+    
+    # DEBUG: Mostrar cálculos
+    with st.expander("🔍 Debug - Cálculo de Dias", expanded=False):
+        st.write(f"📅 Dias no mês: {dias_no_mes}")
+        st.write(f"📅 Dias disponíveis: {dias_disponiveis}")
+        st.write(f"❌ Faltas: {total_dias_faltas}")
+        st.write(f"🏥 Baixas: {total_dias_baixas}")
+        st.write(f"✅ **Dias trabalhados: {dias_trabalhados}**")
+        st.write(f"📊 Dias úteis no mês: {dias_uteis_mes}")
+        st.write(f"✅ **Dias úteis trabalhados: {dias_uteis_trabalhados}**")
+        st.write(f"💰 Vencimento ajustado = (870 / 30) × {dias_trabalhados} = {(salario_bruto/30) * dias_trabalhados:.2f}€")
     
     dados_calculo = {
         'salario_bruto': salario_bruto,
