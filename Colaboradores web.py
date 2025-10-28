@@ -295,8 +295,8 @@ if menu == "⚙️ Configurações":
             key="empresa_config"
         )
         
-        # Forçar reload dos dados
-        df_colab_config = carregar_colaboradores(empresa_config, force_reload=True)
+        # Carregar dados completos (base + config)
+        df_colab_config = carregar_colaboradores_completo(empresa_config, force_reload=True)
         
         if not df_colab_config.empty:
             colaborador_config = st.selectbox(
@@ -321,25 +321,25 @@ if menu == "⚙️ Configurações":
                     format="%.2f"
                 )
                 
-                if st.form_submit_button("💾 Guardar Alterações"):
-                    if atualizar_colaborador_dropbox(
-                        empresa_config,
-                        colaborador_config,
-                        {'Subsídio Alimentação Diário': novo_sub_alim}
-                    ):
-                        # Limpar cache para forçar reload
-                        cache_key = f"df_colaboradores_{empresa_config}"
-                        if cache_key in st.session_state:
-                            del st.session_state[cache_key]
+                if st.form_submit_button("💾 Guardar Alterações", use_container_width=True):
+                    with st.spinner("🔄 A guardar na aba Config_Colaboradores..."):
+                        sucesso = atualizar_subsidio_colaborador(
+                            empresa_config,
+                            colaborador_config,
+                            novo_sub_alim
+                        )
                         
-                        st.success("✅ Dados atualizados com sucesso!")
-                        st.info("🔄 Dados serão recarregados automaticamente no próximo acesso")
-                        
-                        # Recarregar dados para mostrar atualização
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("❌ Erro ao atualizar dados")
+                        if sucesso:
+                            # Limpar TODOS os caches
+                            for key in list(st.session_state.keys()):
+                                if 'colaboradores' in key.lower() and key != 'authenticated':
+                                    del st.session_state[key]
+                            
+                            st.balloons()
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error("❌ Falha ao guardar. Verifique mensagens acima.")
 
 # PÁGINA DE PROCESSAMENTO
 elif menu == "💼 Processar Salários":
@@ -371,12 +371,12 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # Carregar colaboradores (forçar reload se vier das configurações)
+    # Carregar colaboradores (completo = base + configs)
     force_reload = 'config_updated' in st.session_state and st.session_state.config_updated
     if force_reload:
         st.session_state.config_updated = False
     
-    df_colaboradores = carregar_colaboradores(empresa_selecionada, force_reload=force_reload)
+    df_colaboradores = carregar_colaboradores_completo(empresa_selecionada, force_reload=force_reload)
     
     if df_colaboradores.empty:
         st.warning("⚠️ Nenhum colaborador encontrado para esta empresa.")
