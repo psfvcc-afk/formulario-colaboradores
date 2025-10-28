@@ -141,7 +141,7 @@ def calcular_dias_uteis(ano, mes, feriados_list):
     
     for dia in range(1, num_dias + 1):
         data = date(ano, mes, dia)
-        # Se não for fim de semana (5=sábado, 6=domingo) e não for feriado
+        # Dia útil = Segunda a Sexta (0-4) E não é feriado
         if data.weekday() < 5 and data not in feriados_list:
             dias_uteis += 1
     
@@ -264,6 +264,10 @@ if menu == "⚙️ Configurações":
                         {'Subsídio Alimentação Diário': novo_sub_alim}
                     ):
                         st.success("✅ Dados atualizados com sucesso!")
+                        st.info("💡 Volte ao Processamento e recarregue os dados do colaborador")
+                        # Limpar cache para forçar reload
+                        if f"{empresa_config}_{colaborador_config}" in st.session_state:
+                            del st.session_state[f"{empresa_config}_{colaborador_config}"]
                     else:
                         st.error("❌ Erro ao atualizar dados")
 
@@ -312,8 +316,9 @@ elif menu == "💼 Processar Salários":
     # Calcular dias úteis do mês
     todos_feriados = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
     dias_uteis_mes = calcular_dias_uteis(ano_selecionado, mes_selecionado, todos_feriados)
+    num_dias_mes = calendar.monthrange(ano_selecionado, mes_selecionado)[1]
     
-    st.info(f"📊 {len(df_colaboradores)} colaboradores | 📅 Dias úteis no mês: {dias_uteis_mes}")
+    st.info(f"📊 {len(df_colaboradores)} colaboradores | 📅 {calendar.month_name[mes_selecionado]} {ano_selecionado}: {num_dias_mes} dias ({dias_uteis_mes} úteis)")
     
     # Selecionar colaborador
     st.subheader("👤 Selecionar Colaborador")
@@ -368,16 +373,19 @@ elif menu == "💼 Processar Salários":
             sub_ferias = st.selectbox(
                 "Subsídio de Férias",
                 ["Duodécimos", "Total"],
-                index=0 if st.session_state.dados_processamento[chave_dados]['sub_ferias'] == 'Duodécimos' else 1
+                index=0 if dados_salvos['sub_ferias'] == 'Duodécimos' else 1,
+                key=f"sub_ferias_{chave_dados}"
             )
             sub_natal = st.selectbox(
                 "Subsídio de Natal",
                 ["Duodécimos", "Total"],
-                index=0 if st.session_state.dados_processamento[chave_dados]['sub_natal'] == 'Duodécimos' else 1
+                index=0 if dados_salvos['sub_natal'] == 'Duodécimos' else 1,
+                key=f"sub_natal_{chave_dados}"
             )
             desconto_especie = st.checkbox(
                 "Desconto em espécie (cartão refeição)",
-                value=st.session_state.dados_processamento[chave_dados]['desconto_especie']
+                value=dados_salvos['desconto_especie'],
+                key=f"desc_esp_{chave_dados}"
             )
         
         st.markdown("#### 📅 Faltas, Férias e Baixas")
@@ -386,74 +394,87 @@ elif menu == "💼 Processar Salários":
         
         # FALTAS
         with tab1:
+            st.caption("⚠️ Faltas contam dias corridos (incluindo fins de semana)")
             faltas_periodos = []
             for i in range(3):
+                # Valores salvos anteriormente
+                valor_inicio = dados_salvos['faltas_periodos'][i][0] if i < len(dados_salvos['faltas_periodos']) else None
+                valor_fim = dados_salvos['faltas_periodos'][i][1] if i < len(dados_salvos['faltas_periodos']) else None
+                
                 col_f1, col_f2 = st.columns(2)
                 with col_f1:
                     falta_inicio = st.date_input(
                         f"Falta {i+1} - Início",
-                        value=None,
-                        key=f"falta_inicio_{i}",
+                        value=valor_inicio,
+                        key=f"falta_inicio_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
                 with col_f2:
                     falta_fim = st.date_input(
                         f"Falta {i+1} - Fim",
-                        value=None,
-                        key=f"falta_fim_{i}",
+                        value=valor_fim,
+                        key=f"falta_fim_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
-                if falta_inicio and falta_fim:
+                if falta_inicio and falta_fim and falta_inicio <= falta_fim:
                     faltas_periodos.append((falta_inicio, falta_fim))
         
         # FÉRIAS
         with tab2:
+            st.caption("✅ Férias contam apenas dias úteis (exclui fins de semana e feriados)")
             ferias_periodos = []
             for i in range(3):
+                valor_inicio = dados_salvos['ferias_periodos'][i][0] if i < len(dados_salvos['ferias_periodos']) else None
+                valor_fim = dados_salvos['ferias_periodos'][i][1] if i < len(dados_salvos['ferias_periodos']) else None
+                
                 col_v1, col_v2 = st.columns(2)
                 with col_v1:
                     ferias_inicio = st.date_input(
                         f"Férias {i+1} - Início",
-                        value=None,
-                        key=f"ferias_inicio_{i}",
+                        value=valor_inicio,
+                        key=f"ferias_inicio_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
                 with col_v2:
                     ferias_fim = st.date_input(
                         f"Férias {i+1} - Fim",
-                        value=None,
-                        key=f"ferias_fim_{i}",
+                        value=valor_fim,
+                        key=f"ferias_fim_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
-                if ferias_inicio and ferias_fim:
+                if ferias_inicio and ferias_fim and ferias_inicio <= ferias_fim:
                     ferias_periodos.append((ferias_inicio, ferias_fim))
         
         # BAIXAS
         with tab3:
+            st.caption("⚠️ Baixas contam dias corridos (incluindo fins de semana)")
             baixas_periodos = []
             for i in range(3):
+                valor_inicio = dados_salvos['baixas_periodos'][i][0] if i < len(dados_salvos['baixas_periodos']) else None
+                valor_fim = dados_salvos['baixas_periodos'][i][1] if i < len(dados_salvos['baixas_periodos']) else None
+                
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
                     baixa_inicio = st.date_input(
                         f"Baixa {i+1} - Início",
-                        value=None,
-                        key=f"baixa_inicio_{i}",
+                        value=valor_inicio,
+                        key=f"baixa_inicio_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
                 with col_b2:
                     baixa_fim = st.date_input(
                         f"Baixa {i+1} - Fim",
-                        value=None,
-                        key=f"baixa_fim_{i}",
+                        value=valor_fim,
+                        key=f"baixa_fim_{i}_{chave_dados}",
                         min_value=date(ano_selecionado, mes_selecionado, 1),
                         max_value=date(ano_selecionado, mes_selecionado, calendar.monthrange(ano_selecionado, mes_selecionado)[1])
                     )
-                if baixa_inicio and baixa_fim:
+                if baixa_inicio and baixa_fim and baixa_inicio <= baixa_fim:
                     baixas_periodos.append((baixa_inicio, baixa_fim))
         
         st.markdown("---")
@@ -483,34 +504,43 @@ elif menu == "💼 Processar Salários":
             h_extra = st.number_input(
                 "Banco de Horas",
                 min_value=0.0,
+                value=dados_salvos['h_extra'],
                 step=0.5,
                 format="%.2f",
-                help="Número de horas extra a pagar"
+                help="Número de horas extra a pagar",
+                key=f"h_extra_{chave_dados}"
             )
             h_noturnas = h_domingos = h_feriados = 0
         
-        submitted = st.form_submit_button("💰 Calcular Recibo", use_container_width=True)
+        # Botão para guardar (fora do submit principal)
+        col_save, col_calc = st.columns(2)
+        with col_save:
+            if st.form_submit_button("💾 Guardar Dados", use_container_width=True):
+                # Guardar no session_state
+                st.session_state.dados_processamento[chave_dados] = {
+                    'faltas_periodos': faltas_periodos,
+                    'ferias_periodos': ferias_periodos,
+                    'baixas_periodos': baixas_periodos,
+                    'sub_ferias': sub_ferias,
+                    'sub_natal': sub_natal,
+                    'desconto_especie': desconto_especie,
+                    'h_extra': h_extra,
+                    'h_noturnas': h_noturnas,
+                    'h_domingos': h_domingos,
+                    'h_feriados': h_feriados
+                }
+                st.success("✅ Dados guardados! Pode navegar para outras páginas.")
+                st.rerun()
+        
+        with col_calc:
+            submitted = st.form_submit_button("💰 Calcular Recibo", use_container_width=True)
         
         if submitted:
-            # Calcular dias de faltas, férias e baixas
-            def contar_dias(periodos):
-                total_dias = 0
-                dias_uteis = 0
-                for inicio, fim in periodos:
-                    dias_periodo = (fim - inicio).days + 1
-                    total_dias += dias_periodo
-                    # Contar dias úteis (excluindo fins de semana e feriados)
-                    for i in range(dias_periodo):
-                        dia = inicio + timedelta(days=i)
-                        if dia.weekday() < 5 and dia not in todos_feriados:
-                            dias_uteis += 1
-                return total_dias, dias_uteis
-            
-            # Guardar dados no session_state
+            # Guardar dados primeiro
             st.session_state.dados_processamento[chave_dados] = {
-                'faltas': faltas_periodos,
-                'ferias': ferias_periodos,
-                'baixas': baixas_periodos,
+                'faltas_periodos': faltas_periodos,
+                'ferias_periodos': ferias_periodos,
+                'baixas_periodos': baixas_periodos,
                 'sub_ferias': sub_ferias,
                 'sub_natal': sub_natal,
                 'desconto_especie': desconto_especie,
@@ -520,30 +550,76 @@ elif menu == "💼 Processar Salários":
                 'h_feriados': h_feriados
             }
             
-            dias_faltas, dias_faltas_uteis = contar_dias(faltas_periodos)
-            dias_ferias, dias_ferias_uteis = contar_dias(ferias_periodos)
-            dias_baixas, dias_baixas_uteis = contar_dias(baixas_periodos)
+            # Função para contar dias corridos (faltas e baixas)
+            def contar_dias_corridos(periodos):
+                total_dias = 0
+                for inicio, fim in periodos:
+                    dias_periodo = (fim - inicio).days + 1
+                    total_dias += dias_periodo
+                return total_dias
             
-            # Calcular dias trabalhados
-            num_dias_mes = calendar.monthrange(ano_selecionado, mes_selecionado)[1]
-            dias_trabalhados = num_dias_mes - dias_faltas - dias_baixas
-            dias_uteis_trabalhados = dias_uteis_mes - dias_faltas_uteis - dias_baixas_uteis - dias_ferias_uteis
+            # Função para contar dias úteis (férias)
+            def contar_dias_uteis(periodos, feriados_list):
+                dias_uteis = 0
+                for inicio, fim in periodos:
+                    dias_periodo = (fim - inicio).days + 1
+                    for i in range(dias_periodo):
+                        dia = inicio + timedelta(days=i)
+                        # Conta apenas se for dia útil (não fim de semana, não feriado)
+                        if dia.weekday() < 5 and dia not in feriados_list:
+                            dias_uteis += 1
+                return dias_uteis
+            
+            # Calcular dias
+            dias_faltas_corridos = contar_dias_corridos(faltas_periodos)
+            dias_baixas_corridos = contar_dias_corridos(baixas_periodos)
+            dias_ferias_uteis = contar_dias_uteis(ferias_periodos, todos_feriados)
+            
+            # DIAS TRABALHADOS (para cálculo de salário)
+            # Férias SÃO pagas, por isso não descontamos do salário
+            # Apenas faltas e baixas não são pagas
+            dias_trabalhados = num_dias_mes - dias_faltas_corridos - dias_baixas_corridos
+            
+            # DIAS ÚTEIS TRABALHADOS (para subsídio alimentação)
+            # Subsídio alimentação NÃO é pago em férias, faltas e baixas
+            dias_uteis_trabalhados = dias_uteis_mes
+            
+            # Subtrair férias úteis
+            dias_uteis_trabalhados -= dias_ferias_uteis
+            
+            # Subtrair faltas e baixas que caem em dias úteis
+            for inicio, fim in faltas_periodos + baixas_periodos:
+                dias_periodo = (fim - inicio).days + 1
+                for i in range(dias_periodo):
+                    dia = inicio + timedelta(days=i)
+                    if dia.weekday() < 5 and dia not in todos_feriados:
+                        dias_uteis_trabalhados -= 1
+            
+            dias_uteis_trabalhados = max(0, dias_uteis_trabalhados)  # Não pode ser negativo
             
             # Mostrar resumo
             st.markdown("---")
             st.subheader("📊 Resumo do Processamento")
             
             col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-            col_r1.metric("📅 Dias do Mês", num_dias_mes)
-            col_r2.metric("🔴 Faltas", f"{dias_faltas} ({dias_faltas_uteis} úteis)")
-            col_r3.metric("🟢 Férias", f"{dias_ferias} ({dias_ferias_uteis} úteis)")
-            col_r4.metric("🟡 Baixas", f"{dias_baixas} ({dias_baixas_uteis} úteis)")
+            col_r1.metric("📅 Dias do Mês", f"{num_dias_mes} ({dias_uteis_mes} úteis)")
+            col_r2.metric("🔴 Faltas", f"{dias_faltas_corridos} dias")
+            col_r3.metric("🟢 Férias", f"{dias_ferias_uteis} dias úteis")
+            col_r4.metric("🟡 Baixas", f"{dias_baixas_corridos} dias")
             
             col_r5, col_r6 = st.columns(2)
-            col_r5.metric("💼 Dias Trabalhados", dias_trabalhados)
-            col_r6.metric("📊 Dias Úteis Trabalhados", dias_uteis_trabalhados)
+            col_r5.metric("💼 Dias Trabalhados (pagos)", dias_trabalhados, 
+                         help="Total dias - Faltas - Baixas (férias SÃO pagas)")
+            col_r6.metric("🍽️ Dias com Sub. Alimentação", dias_uteis_trabalhados,
+                         help="Dias úteis - Férias - Faltas úteis - Baixas úteis")
             
-            st.info("🚧 Módulo 3 em construção: Cálculos de remunerações e descontos...")
+            st.success("""
+            ✅ **Lógica aplicada:**
+            - **Salário:** Pago por dias trabalhados (férias são pagas, faltas e baixas não)
+            - **Sub. Alimentação:** Pago apenas por dias úteis efetivamente trabalhados (exclui férias, faltas e baixas)
+            """)
+            
+            st.info("🚧 Módulo 3 & 4 em construção: Cálculos de remunerações e descontos...")
 
 # PÁGINA DE RELATÓRIOS
 elif menu == "📊 Relatórios":
