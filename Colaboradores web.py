@@ -9,7 +9,7 @@ import calendar
 import time
 
 st.set_page_config(
-    page_title="Processamento Salarial v2.1",
+    page_title="Processamento Salarial v2.2",
     page_icon="💰",
     layout="wide"
 )
@@ -30,12 +30,10 @@ dbx = dropbox.Dropbox(
 EMPRESAS = {
     "Magnetic Sky Lda": {
         "path": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Processamento Salários Magnetic/Gestão Colaboradores Magnetic.xlsx",
-        "docs_path": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Documentos_Baixas_Magnetic",
         "tem_horas_extras": False
     },
     "CCM Retail Lda": {
         "path": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx",
-        "docs_path": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Documentos_Baixas",
         "tem_horas_extras": True
     }
 }
@@ -58,25 +56,11 @@ MOTIVOS_RESCISAO = [
     "Outro (especificar em observações)"
 ]
 
-# Colunas do snapshot completo
 COLUNAS_SNAPSHOT = [
-    "Nome Completo",
-    "Ano",
-    "Mês",
-    "Nº Horas/Semana",
-    "Subsídio Alimentação Diário",
-    "Número Pingo Doce",
-    "Salário Bruto",
-    "Vencimento Hora",
-    "Status",
-    "Data Rescisão",
-    "Motivo Rescisão",
-    "NIF",
-    "NISS",
-    "Data de Admissão",
-    "IBAN",
-    "Secção",
-    "Timestamp"
+    "Nome Completo", "Ano", "Mês", "Nº Horas/Semana", "Subsídio Alimentação Diário",
+    "Número Pingo Doce", "Salário Bruto", "Vencimento Hora", "Status",
+    "Data Rescisão", "Motivo Rescisão", "NIF", "NISS", "Data de Admissão",
+    "IBAN", "Secção", "Timestamp"
 ]
 
 # ==================== SESSION STATE ====================
@@ -87,6 +71,8 @@ if 'salario_minimo' not in st.session_state:
     st.session_state.salario_minimo = 870.0
 if 'feriados_municipais' not in st.session_state:
     st.session_state.feriados_municipais = [date(2025, 1, 14)]
+if 'ultimo_reload' not in st.session_state:
+    st.session_state.ultimo_reload = datetime.now()
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
@@ -107,88 +93,73 @@ def check_password():
         return False
     return True
 
-# ==================== FUNÇÕES DE CACHE ====================
-
-def invalidar_cache_completo():
-    """Limpa TODOS os caches"""
-    keys_to_delete = [k for k in st.session_state.keys() 
-                     if k not in ['authenticated', 'salario_minimo', 'feriados_municipais', 'password']]
-    for key in keys_to_delete:
-        del st.session_state[key]
-
-# ==================== FUNÇÕES DE GESTÃO DE ABAS ====================
-
-def garantir_aba(empresa, nome_aba, colunas):
-    """Garante que uma aba existe no Excel"""
-    try:
-        file_path = EMPRESAS[empresa]["path"]
-        _, response = dbx.files_download(file_path)
-        wb = load_workbook(BytesIO(response.content))
-        
-        if nome_aba not in wb.sheetnames:
-            ws = wb.create_sheet(nome_aba)
-            ws.append(colunas)
-            output = BytesIO()
-            wb.save(output)
-            output.seek(0)
-            dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
-            st.success(f"✅ Aba '{nome_aba}' criada")
-            return True
-        return True
-    except Exception as e:
-        st.error(f"❌ Erro ao criar aba {nome_aba}: {e}")
-        return False
+# ==================== FUNÇÕES DROPBOX (SEM CACHE) ====================
 
 def get_nome_aba_snapshot(ano, mes):
     """Retorna nome da aba de snapshot do mês"""
     return f"Estado_{ano}_{mes:02d}"
 
-# ==================== SISTEMA DE SNAPSHOTS ====================
-
-def carregar_dados_base(empresa):
-    """Carrega dados base dos colaboradores (aba Colaboradores)"""
-    try:
-        _, response = dbx.files_download(EMPRESAS[empresa]["path"])
-        df = pd.read_excel(BytesIO(response.content), sheet_name="Colaboradores")
-        return df
-    except Exception as e:
-        st.error(f"❌ Erro ao carregar dados base: {e}")
-        return pd.DataFrame()
-
-def carregar_ultimo_snapshot(empresa, colaborador, ano=None, mes=None):
-    """Carrega o último snapshot do colaborador (mais recente ou de mês específico)"""
+def download_excel(empresa):
+    """Download do Excel direto do Dropbox - SEM CACHE"""
     try:
         file_path = EMPRESAS[empresa]["path"]
         _, response = dbx.files_download(file_path)
-        wb = load_workbook(BytesIO(response.content))
-        
-        # Se mês/ano especificados, buscar naquela aba
-        if ano and mes:
-            nome_aba = get_nome_aba_snapshot(ano, mes)
-            if nome_aba in wb.sheetnames:
-                df = pd.read_excel(BytesIO(response.content), sheet_name=nome_aba)
-                df_colab = df[df['Nome Completo'] == colaborador]
-                if not df_colab.empty:
-                    return df_colab.iloc[-1].to_dict()  # Última linha = mais recente
-        
-        # Buscar snapshot mais recente em qualquer mês
-        abas_estado = [s for s in wb.sheetnames if s.startswith('Estado_')]
-        if not abas_estado:
-            return None
-        
-        # Ordenar abas por data (mais recente primeiro)
-        abas_estado.sort(reverse=True)
-        
-        for aba in abas_estado:
-            df = pd.read_excel(BytesIO(response.content), sheet_name=aba)
-            df_colab = df[df['Nome Completo'] == colaborador]
-            if not df_colab.empty:
-                return df_colab.iloc[-1].to_dict()
-        
-        return None
+        return BytesIO(response.content)
     except Exception as e:
-        st.warning(f"⚠️ Aviso ao carregar snapshot: {e}")
+        st.error(f"❌ Erro ao baixar Excel: {e}")
         return None
+
+def garantir_aba(wb, nome_aba, colunas):
+    """Garante que uma aba existe no workbook"""
+    if nome_aba not in wb.sheetnames:
+        ws = wb.create_sheet(nome_aba)
+        ws.append(colunas)
+        return True
+    return False
+
+def upload_excel(empresa, wb):
+    """Upload do Excel para Dropbox"""
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+        return True
+    except Exception as e:
+        st.error(f"❌ Erro ao enviar Excel: {e}")
+        return False
+
+# ==================== FUNÇÕES DE DADOS BASE ====================
+
+def carregar_dados_base(empresa):
+    """Carrega aba Colaboradores - dados base originais"""
+    excel_file = download_excel(empresa)
+    if excel_file:
+        try:
+            df = pd.read_excel(excel_file, sheet_name="Colaboradores")
+            return df
+        except Exception as e:
+            st.error(f"❌ Erro ao ler aba Colaboradores: {e}")
+    return pd.DataFrame()
+
+def calcular_salario_base(horas_semana, salario_minimo):
+    """Calcula salário base de acordo com horas/semana"""
+    if horas_semana == 40:
+        return salario_minimo
+    elif horas_semana == 20:
+        return salario_minimo / 2
+    elif horas_semana == 16:
+        return salario_minimo * 0.4
+    return salario_minimo * (horas_semana / 40)
+
+def calcular_vencimento_hora(salario_bruto, horas_semana):
+    """Calcula vencimento por hora"""
+    if horas_semana == 0:
+        return 0
+    return (salario_bruto * 12) / (52 * horas_semana)
+
+# ==================== SISTEMA DE SNAPSHOTS ====================
 
 def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     """Cria snapshot inicial a partir dos dados base"""
@@ -196,7 +167,6 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     dados_colab = df_base[df_base['Nome Completo'] == colaborador]
     
     if dados_colab.empty:
-        st.error(f"❌ Colaborador {colaborador} não encontrado nos dados base")
         return None
     
     dados = dados_colab.iloc[0]
@@ -213,138 +183,173 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Salário Bruto": salario_bruto,
         "Vencimento Hora": calcular_vencimento_hora(salario_bruto, horas_semana),
         "Status": "Ativo",
-        "Data Rescisão": None,
-        "Motivo Rescisão": None,
-        "NIF": dados.get('NIF', ''),
-        "NISS": dados.get('NISS', ''),
-        "Data de Admissão": dados.get('Data de Admissão', ''),
-        "IBAN": dados.get('IBAN', ''),
-        "Secção": dados.get('Secção', ''),
+        "Data Rescisão": "",
+        "Motivo Rescisão": "",
+        "NIF": str(dados.get('NIF', '')),
+        "NISS": str(dados.get('NISS', '')),
+        "Data de Admissão": str(dados.get('Data de Admissão', '')),
+        "IBAN": str(dados.get('IBAN', '')),
+        "Secção": str(dados.get('Secção', '')),
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
     return snapshot
 
-def gravar_snapshot(empresa, dados_snapshot):
-    """Grava snapshot completo do colaborador no mês"""
+def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
+    """
+    Carrega o último snapshot do colaborador no mês.
+    SEMPRE vai à Dropbox - SEM CACHE!
+    """
+    excel_file = download_excel(empresa)
+    if not excel_file:
+        return None
+    
     try:
-        ano = dados_snapshot['Ano']
-        mes = dados_snapshot['Mês']
+        wb = load_workbook(excel_file)
         nome_aba = get_nome_aba_snapshot(ano, mes)
         
-        # Garantir que a aba existe
-        garantir_aba(empresa, nome_aba, COLUNAS_SNAPSHOT)
+        # Tentar carregar da aba do mês específico
+        if nome_aba in wb.sheetnames:
+            df = pd.read_excel(excel_file, sheet_name=nome_aba)
+            df_colab = df[df['Nome Completo'] == colaborador]
+            
+            if not df_colab.empty:
+                # ÚLTIMA linha = snapshot mais recente
+                snapshot = df_colab.iloc[-1].to_dict()
+                st.caption(f"📸 Snapshot carregado: {snapshot.get('Timestamp', 'N/A')} (Aba: {nome_aba})")
+                return snapshot
         
-        file_path = EMPRESAS[empresa]["path"]
-        _, response = dbx.files_download(file_path)
-        wb = load_workbook(BytesIO(response.content))
+        # Se não existe no mês atual, buscar em meses anteriores
+        abas_estado = sorted([s for s in wb.sheetnames if s.startswith('Estado_')], reverse=True)
+        
+        for aba in abas_estado:
+            try:
+                df = pd.read_excel(excel_file, sheet_name=aba)
+                df_colab = df[df['Nome Completo'] == colaborador]
+                
+                if not df_colab.empty:
+                    snapshot = df_colab.iloc[-1].to_dict()
+                    # Atualizar para mês atual
+                    snapshot['Ano'] = ano
+                    snapshot['Mês'] = mes
+                    snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.caption(f"📸 Snapshot herdado de {aba}: {snapshot.get('Timestamp', 'N/A')}")
+                    return snapshot
+            except:
+                continue
+        
+        # Se não encontrou nenhum snapshot, criar inicial
+        st.warning(f"⚠️ Nenhum snapshot encontrado. Criando inicial...")
+        return criar_snapshot_inicial(empresa, colaborador, ano, mes)
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar snapshot: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+
+def gravar_snapshot(empresa, snapshot):
+    """
+    Grava snapshot DIRETO no Dropbox.
+    Adiciona NOVA LINHA na aba Estado_YYYY_MM.
+    """
+    try:
+        ano = snapshot['Ano']
+        mes = snapshot['Mês']
+        nome_aba = get_nome_aba_snapshot(ano, mes)
+        
+        # Baixar Excel atual
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return False
+        
+        wb = load_workbook(excel_file)
+        
+        # Garantir que aba existe
+        aba_criada = garantir_aba(wb, nome_aba, COLUNAS_SNAPSHOT)
+        if aba_criada:
+            st.info(f"✨ Aba '{nome_aba}' criada")
+        
         ws = wb[nome_aba]
         
-        # Adicionar nova linha com snapshot completo
-        nova_linha = [dados_snapshot.get(col, '') for col in COLUNAS_SNAPSHOT]
+        # Preparar linha com snapshot
+        nova_linha = []
+        for col in COLUNAS_SNAPSHOT:
+            valor = snapshot.get(col, '')
+            # Converter tipos para garantir compatibilidade
+            if isinstance(valor, (int, float)):
+                nova_linha.append(valor)
+            else:
+                nova_linha.append(str(valor) if valor else '')
+        
+        # Adicionar linha
         ws.append(nova_linha)
         
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+        # Upload de volta
+        sucesso = upload_excel(empresa, wb)
         
-        return True
+        if sucesso:
+            linha = ws.max_row
+            st.success(f"✅ Snapshot gravado na linha {linha} da aba '{nome_aba}'")
+            return True
+        
+        return False
+        
     except Exception as e:
         st.error(f"❌ Erro ao gravar snapshot: {e}")
         import traceback
         st.error(traceback.format_exc())
         return False
 
-def carregar_estado_colaborador(empresa, colaborador, ano, mes):
-    """
-    Carrega estado completo do colaborador no mês.
-    Se não existir snapshot, cria um inicial dos dados base.
-    """
-    # Tentar carregar snapshot do mês específico
-    snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
-    
-    if snapshot:
-        return snapshot
-    
-    # Se não existe snapshot do mês, buscar o mais recente de qualquer mês
-    snapshot_anterior = carregar_ultimo_snapshot(empresa, colaborador)
-    
-    if snapshot_anterior:
-        # Atualizar mês/ano e timestamp
-        snapshot_anterior['Ano'] = ano
-        snapshot_anterior['Mês'] = mes
-        snapshot_anterior['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Gravar novo snapshot para o mês atual
-        gravar_snapshot(empresa, snapshot_anterior)
-        return snapshot_anterior
-    
-    # Se não existe nenhum snapshot, criar inicial
-    snapshot_inicial = criar_snapshot_inicial(empresa, colaborador, ano, mes)
-    if snapshot_inicial:
-        gravar_snapshot(empresa, snapshot_inicial)
-        return snapshot_inicial
-    
-    return None
-
 def atualizar_campo_colaborador(empresa, colaborador, ano, mes, campo, novo_valor):
     """
-    Atualiza um campo específico do colaborador.
-    Carrega último estado, atualiza campo e grava novo snapshot.
+    Atualiza um campo do colaborador.
+    1. Carrega último snapshot
+    2. Atualiza campo
+    3. Recalcula dependências
+    4. Grava novo snapshot
     """
-    # Carregar estado atual
-    estado = carregar_estado_colaborador(empresa, colaborador, ano, mes)
+    # Carregar estado atual - DIRETO da Dropbox
+    snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
     
-    if not estado:
-        st.error(f"❌ Não foi possível carregar estado do colaborador")
+    if not snapshot:
+        st.error(f"❌ Não foi possível carregar snapshot de {colaborador}")
         return False
     
     # Atualizar campo
-    estado[campo] = novo_valor
-    estado['Ano'] = ano
-    estado['Mês'] = mes
-    estado['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    snapshot[campo] = novo_valor
+    snapshot['Ano'] = ano
+    snapshot['Mês'] = mes
+    snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Recalcular campos dependentes
     if campo == "Nº Horas/Semana":
         horas = float(novo_valor)
-        estado['Salário Bruto'] = calcular_salario_base(horas, st.session_state.salario_minimo)
-        estado['Vencimento Hora'] = calcular_vencimento_hora(estado['Salário Bruto'], horas)
+        snapshot['Salário Bruto'] = calcular_salario_base(horas, st.session_state.salario_minimo)
+        snapshot['Vencimento Hora'] = calcular_vencimento_hora(snapshot['Salário Bruto'], horas)
     
-    # Gravar novo snapshot
-    return gravar_snapshot(empresa, estado)
+    # Gravar - DIRETO na Dropbox
+    return gravar_snapshot(empresa, snapshot)
 
 def carregar_colaboradores_ativos(empresa, ano, mes):
-    """Carrega todos os colaboradores ativos no mês"""
+    """Carrega lista de colaboradores ativos no mês"""
     df_base = carregar_dados_base(empresa)
+    
+    if df_base.empty:
+        return []
+    
     colaboradores_ativos = []
     
     for _, colab in df_base.iterrows():
         nome = colab['Nome Completo']
-        estado = carregar_estado_colaborador(empresa, nome, ano, mes)
+        snapshot = carregar_ultimo_snapshot(empresa, nome, ano, mes)
         
-        if estado and estado.get('Status') == 'Ativo':
-            colaboradores_ativos.append(estado)
+        if snapshot and snapshot.get('Status') == 'Ativo':
+            colaboradores_ativos.append(nome)
     
-    if colaboradores_ativos:
-        return pd.DataFrame(colaboradores_ativos)
-    return pd.DataFrame()
+    return colaboradores_ativos
 
 # ==================== FUNÇÕES DE CÁLCULO ====================
-
-def calcular_salario_base(horas_semana, salario_minimo):
-    """Calcula salário base de acordo com horas/semana"""
-    if horas_semana == 40:
-        return salario_minimo
-    elif horas_semana == 20:
-        return salario_minimo / 2
-    elif horas_semana == 16:
-        return salario_minimo * 0.4
-    return salario_minimo * (horas_semana / 40)
-
-def calcular_vencimento_hora(salario_bruto, horas_semana):
-    """Calcula vencimento por hora"""
-    return (salario_bruto * 12) / (52 * horas_semana)
 
 def calcular_dias_uteis(ano, mes, feriados_list):
     """Calcula dias úteis do mês"""
@@ -377,7 +382,6 @@ def calcular_dias_trabalhados_com_admissao(mes, ano, data_admissao, total_faltas
     """Calcula dias trabalhados considerando data de admissão"""
     dias_no_mes = calendar.monthrange(ano, mes)[1]
     
-    # Se admissão no mês
     if data_admissao.month == mes and data_admissao.year == ano:
         primeiro_dia_trabalho = data_admissao.day
         dias_possiveis = dias_no_mes - primeiro_dia_trabalho + 1
@@ -429,7 +433,7 @@ def processar_calculo_salario(dados_form):
     # DESCONTOS
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
-    irs = base_ss * 0.10  # Placeholder
+    irs = base_ss * 0.10
     desconto_especie = sub_alimentacao if dados_form.get('desconto_especie', False) else 0
     total_descontos = seg_social + irs + desconto_especie
     
@@ -456,34 +460,33 @@ def processar_calculo_salario(dados_form):
         'liquido': liquido
     }
 
-# ==================== FUNÇÕES AUXILIARES ====================
-
 def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs, dias_aviso):
-    """Registra rescisão atualizando snapshot do colaborador"""
-    estado = carregar_estado_colaborador(empresa, colaborador, ano, mes)
+    """Registra rescisão atualizando snapshot"""
+    snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
     
-    if not estado:
+    if not snapshot:
         return False
     
-    estado['Status'] = 'Rescindido'
-    estado['Data Rescisão'] = data_rescisao.strftime("%Y-%m-%d")
-    estado['Motivo Rescisão'] = f"{motivo} | Dias aviso: {dias_aviso} | Obs: {obs}"
-    estado['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    snapshot['Status'] = 'Rescindido'
+    snapshot['Data Rescisão'] = data_rescisao.strftime("%Y-%m-%d")
+    snapshot['Motivo Rescisão'] = f"{motivo} | Dias aviso: {dias_aviso} | Obs: {obs}"
+    snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    return gravar_snapshot(empresa, estado)
+    return gravar_snapshot(empresa, snapshot)
 
 # ==================== INTERFACE ====================
 
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v2.1")
-st.caption("🔄 Sistema com snapshots mensais - dados sempre atualizados")
+st.title("💰 Processamento Salarial v2.2")
+st.caption("🔄 Sistema SEM CACHE - dados sempre da Dropbox")
+st.caption(f"🕐 Último reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 st.markdown("---")
 
 menu = st.sidebar.radio(
     "Menu Principal",
-    ["⚙️ Configurações", "💼 Processar Salários", "🚪 Rescisões", "📊 Relatórios"],
+    ["⚙️ Configurações", "💼 Processar Salários", "🚪 Rescisões"],
     index=0
 )
 
@@ -527,11 +530,12 @@ if menu == "⚙️ Configurações":
             
             if st.button("💾 Atualizar Feriados"):
                 st.session_state.feriados_municipais = feriados_temp
-                st.success(f"✅ {len(feriados_temp)} feriados municipais configurados")
+                st.success(f"✅ {len(feriados_temp)} feriados configurados")
     
     # TAB 2: COLABORADORES
     with tab2:
         st.subheader("👥 Editar Dados de Colaboradores")
+        st.warning("⚠️ ATENÇÃO: Ao clicar Guardar, aguarde a confirmação antes de fazer qualquer outra ação!")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -543,62 +547,85 @@ if menu == "⚙️ Configurações":
         with col3:
             ano_config = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_config")
         
-        df_ativos = carregar_colaboradores_ativos(empresa_sel, ano_config, mes_config)
+        st.info(f"📅 A trabalhar com: {calendar.month_name[mes_config]}/{ano_config}")
         
-        if not df_ativos.empty:
+        colaboradores_ativos = carregar_colaboradores_ativos(empresa_sel, ano_config, mes_config)
+        
+        if not colaboradores_ativos:
+            st.warning("⚠️ Nenhum colaborador ativo encontrado")
+        else:
             colaborador_sel = st.selectbox(
                 "Colaborador",
-                options=df_ativos['Nome Completo'].tolist(),
+                options=colaboradores_ativos,
                 key="colab_config"
             )
             
-            estado_atual = carregar_estado_colaborador(empresa_sel, colaborador_sel, ano_config, mes_config)
+            # CARREGAR SNAPSHOT - SEM CACHE!
+            with st.spinner("🔄 A carregar dados da Dropbox..."):
+                snapshot = carregar_ultimo_snapshot(empresa_sel, colaborador_sel, ano_config, mes_config)
             
-            if estado_atual:
+            if snapshot:
                 st.markdown("---")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("📊 Subsídio Atual", f"{estado_atual['Subsídio Alimentação Diário']:.2f}€")
-                col2.metric("⏰ Horas/Semana", f"{estado_atual['Nº Horas/Semana']:.0f}h")
-                col3.metric("🔢 Nº Pingo Doce", estado_atual.get('Número Pingo Doce', 'N/A'))
+                st.markdown("### 📊 Dados Atuais")
                 
-                with st.form("form_editar"):
-                    st.markdown(f"### ✏️ Editar: {colaborador_sel} ({calendar.month_name[mes_config]}/{ano_config})")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("💰 Subsídio Alimentação", f"{snapshot['Subsídio Alimentação Diário']:.2f}€")
+                col2.metric("⏰ Horas/Semana", f"{snapshot['Nº Horas/Semana']:.0f}h")
+                col3.metric("🔢 Nº Pingo Doce", snapshot.get('Número Pingo Doce', 'N/A'))
+                
+                st.markdown("---")
+                
+                with st.form("form_editar", clear_on_submit=False):
+                    st.markdown(f"### ✏️ Editar: {colaborador_sel}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
                         novo_sub = st.number_input(
-                            "Subsídio Alimentação Diário (€)",
+                            "Novo Subsídio Alimentação Diário (€)",
                             min_value=0.0,
-                            value=float(estado_atual['Subsídio Alimentação Diário']),
+                            value=float(snapshot['Subsídio Alimentação Diário']),
                             step=0.10,
-                            format="%.2f"
+                            format="%.2f",
+                            key="novo_sub_input"
                         )
                     
                     with col2:
                         novo_num_pingo = st.text_input(
-                            "Número Pingo Doce",
-                            value=str(estado_atual.get('Número Pingo Doce', ''))
+                            "Novo Número Pingo Doce",
+                            value=str(snapshot.get('Número Pingo Doce', '')),
+                            key="novo_num_input"
                         )
                     
-                    submit = st.form_submit_button("💾 Guardar Alterações", use_container_width=True)
+                    submit = st.form_submit_button("💾 GUARDAR ALTERAÇÕES", use_container_width=True, type="primary")
                     
                     if submit:
-                        with st.spinner("🔄 A guardar snapshot atualizado..."):
-                            sucesso1 = atualizar_campo_colaborador(empresa_sel, colaborador_sel, ano_config, mes_config, 
-                                                                   "Subsídio Alimentação Diário", novo_sub)
-                            sucesso2 = atualizar_campo_colaborador(empresa_sel, colaborador_sel, ano_config, mes_config,
-                                                                   "Número Pingo Doce", novo_num_pingo)
-                            
-                            if sucesso1 and sucesso2:
-                                invalidar_cache_completo()
-                                st.success(f"✅ Snapshot atualizado! Dados gravados para {calendar.month_name[mes_config]}/{ano_config}")
-                                st.info("ℹ️ Esta alteração estará disponível em todos os módulos imediatamente")
-                                st.balloons()
-                                time.sleep(2)
-                                st.rerun()
-        else:
-            st.warning("⚠️ Nenhum colaborador ativo encontrado")
-    
+                        st.markdown("---")
+                        st.warning("⏳ A GUARDAR... NÃO FECHE OU NAVEGUE!")
+                        
+                        with st.spinner("🔄 Passo 1/3: Atualizando subsídio..."):
+                            sucesso1 = atualizar_campo_colaborador(
+                                empresa_sel, colaborador_sel, ano_config, mes_config,
+                                "Subsídio Alimentação Diário", novo_sub
+                            )
+                            time.sleep(1)
+                        
+                        with st.spinner("🔄 Passo 2/3: Atualizando número Pingo Doce..."):
+                            sucesso2 = atualizar_campo_colaborador(
+                                empresa_sel, colaborador_sel, ano_config, mes_config,
+                                "Número Pingo Doce", novo_num_pingo
+                            )
+                            time.sleep(1)
+                        
+                        if sucesso1 and sucesso2:
+                            st.success("✅ DADOS GRAVADOS COM SUCESSO!")
+                            st.info("🔄 A recarregar página em 3 segundos...")
+                            st.balloons()
+                            time.sleep(3)
+                            st.session_state.ultimo_reload = datetime.now()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao gravar. Verifique as mensagens acima.")
+
     # TAB 3: HORÁRIOS
     with tab3:
         st.subheader("⏰ Mudanças de Horário")
@@ -613,30 +640,35 @@ if menu == "⚙️ Configurações":
         with col3:
             ano_h = st.selectbox("Ano Vigência", [2024, 2025, 2026], index=1, key="ano_horas")
         
-        df_ativos_h = carregar_colaboradores_ativos(empresa_h, ano_h, mes_h)
+        colaboradores_h = carregar_colaboradores_ativos(empresa_h, ano_h, mes_h)
         
-        if not df_ativos_h.empty:
+        if not colaboradores_h:
+            st.warning("⚠️ Nenhum colaborador ativo")
+        else:
             with st.form("form_horas"):
-                colaborador_h = st.selectbox("Colaborador", df_ativos_h['Nome Completo'].tolist())
+                colaborador_h = st.selectbox("Colaborador", colaboradores_h)
                 
-                estado_h = carregar_estado_colaborador(empresa_h, colaborador_h, ano_h, mes_h)
-                horas_atuais = estado_h['Nº Horas/Semana'] if estado_h else 40
+                snapshot_h = carregar_ultimo_snapshot(empresa_h, colaborador_h, ano_h, mes_h)
+                horas_atuais = snapshot_h['Nº Horas/Semana'] if snapshot_h else 40
                 
                 st.info(f"⏰ Horário atual: **{horas_atuais:.0f}h/semana**")
                 
                 novas_horas = st.selectbox("Novo Horário (h/semana)", [16, 20, 40], index=2)
                 
-                submit_h = st.form_submit_button("💾 Registar Mudança", use_container_width=True)
+                submit_h = st.form_submit_button("💾 REGISTAR MUDANÇA", use_container_width=True, type="primary")
                 
                 if submit_h:
-                    with st.spinner("🔄 A atualizar snapshot..."):
-                        sucesso = atualizar_campo_colaborador(empresa_h, colaborador_h, ano_h, mes_h,
-                                                             "Nº Horas/Semana", float(novas_horas))
+                    with st.spinner("🔄 A gravar mudança de horário..."):
+                        sucesso = atualizar_campo_colaborador(
+                            empresa_h, colaborador_h, ano_h, mes_h,
+                            "Nº Horas/Semana", float(novas_horas)
+                        )
+                        
                         if sucesso:
-                            invalidar_cache_completo()
-                            st.success(f"✅ Horário atualizado: {horas_atuais:.0f}h → {novas_horas}h (vigência {calendar.month_name[mes_h]}/{ano_h})")
+                            st.success(f"✅ Horário atualizado: {horas_atuais:.0f}h → {novas_horas}h")
                             st.balloons()
-                            time.sleep(2)
+                            time.sleep(3)
+                            st.session_state.ultimo_reload = datetime.now()
                             st.rerun()
 
 # ==================== PROCESSAR SALÁRIOS ====================
@@ -645,7 +677,6 @@ elif menu == "💼 Processar Salários":
     st.header("💼 Processamento Mensal de Salários")
     
     col1, col2, col3 = st.columns(3)
-    
     with col1:
         empresa_proc = st.selectbox("🏢 Empresa", list(EMPRESAS.keys()), key="emp_proc")
     with col2:
@@ -655,26 +686,28 @@ elif menu == "💼 Processar Salários":
     with col3:
         ano_proc = st.selectbox("📆 Ano", [2024, 2025, 2026], index=1, key="ano_proc")
     
-    df_ativos_proc = carregar_colaboradores_ativos(empresa_proc, ano_proc, mes_proc)
+    with st.spinner("🔄 A carregar colaboradores ativos..."):
+        colaboradores_proc = carregar_colaboradores_ativos(empresa_proc, ano_proc, mes_proc)
     
-    if df_ativos_proc.empty:
+    if not colaboradores_proc:
         st.warning("⚠️ Nenhum colaborador ativo encontrado")
         st.stop()
     
-    colaborador_proc = st.selectbox("👤 Colaborador", df_ativos_proc['Nome Completo'].tolist(), key="colab_proc")
+    colaborador_proc = st.selectbox("👤 Colaborador", colaboradores_proc, key="colab_proc")
     
-    # Carregar estado completo do colaborador no mês
-    estado = carregar_estado_colaborador(empresa_proc, colaborador_proc, ano_proc, mes_proc)
+    # CARREGAR SNAPSHOT - SEM CACHE!
+    with st.spinner("🔄 A carregar dados do colaborador da Dropbox..."):
+        snapshot_proc = carregar_ultimo_snapshot(empresa_proc, colaborador_proc, ano_proc, mes_proc)
     
-    if not estado:
+    if not snapshot_proc:
         st.error("❌ Erro ao carregar dados do colaborador")
         st.stop()
     
-    salario_bruto = float(estado['Salário Bruto'])
-    horas_semana = float(estado['Nº Horas/Semana'])
-    subsidio_alim = float(estado['Subsídio Alimentação Diário'])
-    vencimento_hora = float(estado['Vencimento Hora'])
-    numero_pingo = estado.get('Número Pingo Doce', '')
+    salario_bruto = float(snapshot_proc['Salário Bruto'])
+    horas_semana = float(snapshot_proc['Nº Horas/Semana'])
+    subsidio_alim = float(snapshot_proc['Subsídio Alimentação Diário'])
+    vencimento_hora = float(snapshot_proc['Vencimento Hora'])
+    numero_pingo = snapshot_proc.get('Número Pingo Doce', '')
     
     feriados_completos = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
     dias_uteis_mes = calcular_dias_uteis(ano_proc, mes_proc, feriados_completos)
@@ -691,12 +724,10 @@ elif menu == "💼 Processar Salários":
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("📅 Dias Úteis Mês", dias_uteis_mes)
-        col2.metric("🔢 NIF", estado.get('NIF', 'N/A'))
-        col3.metric("🔢 NISS", estado.get('NISS', 'N/A'))
+        col2.metric("🔢 NIF", snapshot_proc.get('NIF', 'N/A'))
+        col3.metric("🔢 NISS", snapshot_proc.get('NISS', 'N/A'))
         if numero_pingo:
             col4.metric("🔢 Nº Pingo Doce", numero_pingo)
-        
-        st.caption(f"📸 Snapshot carregado: {estado.get('Timestamp', 'N/A')}")
     
     st.markdown("---")
     
@@ -712,7 +743,7 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # AUSÊNCIAS (simplificado para o exemplo)
+    # AUSÊNCIAS (simplificado)
     st.subheader("🏖️ Faltas e Baixas")
     col1, col2 = st.columns(2)
     with col1:
@@ -736,15 +767,15 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # OUTROS
-    outros_proveitos = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0, step=10.0)
+    outros_proveitos = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0)
     
     st.markdown("---")
     
     # CALCULAR
-    data_admissao = pd.to_datetime(estado.get('Data de Admissão', date.today())).date()
-    dias_trabalhados = calcular_dias_trabalhados_com_admissao(mes_proc, ano_proc, data_admissao, 
-                                                              total_dias_faltas, total_dias_baixas)
+    data_admissao = pd.to_datetime(snapshot_proc.get('Data de Admissão', date.today())).date()
+    dias_trabalhados = calcular_dias_trabalhados_com_admissao(
+        mes_proc, ano_proc, data_admissao, total_dias_faltas, total_dias_baixas
+    )
     dias_uteis_trabalhados = max(dias_uteis_mes - total_dias_faltas - total_dias_baixas, 0)
     
     dados_calculo = {
@@ -802,19 +833,6 @@ elif menu == "💼 Processar Salários":
         st.metric("Dias Úteis Trab.", dias_uteis_trabalhados)
         st.markdown("---")
         st.metric("**💰 LÍQUIDO**", f"**{resultado['liquido']:.2f}€**")
-    
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("💾 Guardar", use_container_width=True):
-            st.info("🚧 Em desenvolvimento...")
-    with col2:
-        if st.button("📄 Gerar PDF", use_container_width=True):
-            st.info("🚧 Em desenvolvimento...")
-    with col3:
-        if st.button("📊 Export Excel", use_container_width=True):
-            st.info("🚧 Em desenvolvimento...")
 
 # ==================== RESCISÕES ====================
 
@@ -831,13 +849,13 @@ elif menu == "🚪 Rescisões":
     with col3:
         ano_resc = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_resc")
     
-    df_ativos_resc = carregar_colaboradores_ativos(empresa_resc, ano_resc, mes_resc)
+    colaboradores_resc = carregar_colaboradores_ativos(empresa_resc, ano_resc, mes_resc)
     
-    if df_ativos_resc.empty:
+    if not colaboradores_resc:
         st.warning("⚠️ Nenhum colaborador ativo")
     else:
         with st.form("form_resc"):
-            colaborador_resc = st.selectbox("Colaborador", df_ativos_resc['Nome Completo'].tolist())
+            colaborador_resc = st.selectbox("Colaborador", colaboradores_resc)
             
             col1, col2 = st.columns(2)
             with col1:
@@ -848,46 +866,26 @@ elif menu == "🚪 Rescisões":
             motivo = st.selectbox("Motivo", MOTIVOS_RESCISAO)
             obs = st.text_area("Observações", height=100)
             
-            submit = st.form_submit_button("💾 Registar Rescisão", use_container_width=True)
+            submit = st.form_submit_button("💾 REGISTAR RESCISÃO", use_container_width=True, type="primary")
             
             if submit:
-                with st.spinner("🔄 A registar..."):
-                    sucesso = registar_rescisao(empresa_resc, colaborador_resc, ano_resc, mes_resc,
-                                              data_rescisao, motivo, obs, dias_aviso)
+                with st.spinner("🔄 A registar rescisão..."):
+                    sucesso = registar_rescisao(
+                        empresa_resc, colaborador_resc, ano_resc, mes_resc,
+                        data_rescisao, motivo, obs, dias_aviso
+                    )
+                    
                     if sucesso:
-                        invalidar_cache_completo()
-                        st.success(f"✅ Rescisão registada! {colaborador_resc} não aparecerá mais nos próximos meses")
-                        time.sleep(2)
+                        st.success(f"✅ Rescisão de {colaborador_resc} registada!")
+                        st.info("ℹ️ Este colaborador não aparecerá nos meses seguintes")
+                        time.sleep(3)
+                        st.session_state.ultimo_reload = datetime.now()
                         st.rerun()
-
-# ==================== RELATÓRIOS ====================
-
-elif menu == "📊 Relatórios":
-    st.header("📊 Relatórios")
-    st.info("🚧 Módulo em desenvolvimento...")
-    
-    st.markdown("### 🔍 Debug: Ver Snapshots")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        empresa_debug = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_debug")
-    with col2:
-        try:
-            _, response = dbx.files_download(EMPRESAS[empresa_debug]["path"])
-            wb = load_workbook(BytesIO(response.content))
-            abas_estado = [s for s in wb.sheetnames if s.startswith('Estado_')]
-            if abas_estado:
-                aba_sel = st.selectbox("Aba Estado", sorted(abas_estado, reverse=True))
-                df_debug = pd.read_excel(BytesIO(response.content), sheet_name=aba_sel)
-                st.dataframe(df_debug, use_container_width=True)
-            else:
-                st.info("📭 Nenhuma aba de estado encontrada ainda")
-        except Exception as e:
-            st.error(f"Erro: {e}")
 
 # SIDEBAR
 st.sidebar.markdown("---")
-st.sidebar.info(f"👤 Sistema: v2.1 (Snapshots)\n💶 SMN: {st.session_state.salario_minimo}€")
+st.sidebar.info(f"👤 v2.2 (SEM CACHE)\n💶 SMN: {st.session_state.salario_minimo}€")
+st.sidebar.caption("✅ Dados sempre atualizados da Dropbox")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
