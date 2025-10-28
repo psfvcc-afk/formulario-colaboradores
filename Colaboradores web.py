@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 import dropbox
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from io import BytesIO
 from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 import calendar
 
 st.set_page_config(
@@ -59,7 +60,9 @@ if 'authenticated' not in st.session_state:
 if 'salario_minimo' not in st.session_state:
     st.session_state.salario_minimo = 870.0
 if 'feriados_municipais' not in st.session_state:
-    st.session_state.feriados_municipais = [date(2025, 1, 14)]  # Elvas
+    st.session_state.feriados_municipais = [date(2025, 1, 14)]
+if 'dados_processamento' not in st.session_state:
+    st.session_state.dados_processamento = {}
 
 # Função de autenticação
 def check_password():
@@ -94,7 +97,32 @@ def carregar_colaboradores(empresa):
         st.error(f"Erro ao carregar colaboradores: {e}")
         return pd.DataFrame()
 
-# Função para carregar horas extras (CCM Retail)
+# Função para atualizar colaborador
+def atualizar_colaborador_dropbox(empresa, nome_colaborador, dados_atualizados):
+    try:
+        file_path = EMPRESAS[empresa]["path"]
+        _, response = dbx.files_download(file_path)
+        wb = load_workbook(BytesIO(response.content))
+        
+        if "Colaboradores" in wb.sheetnames:
+            ws = wb["Colaboradores"]
+            
+            # Encontrar linha do colaborador
+            for row in range(2, ws.max_row + 1):
+                if ws.cell(row, 1).value == nome_colaborador:
+                    # Atualizar subsídio alimentação (coluna 19)
+                    if 'Subsídio Alimentação Diário' in dados_atualizados:
+                        ws.cell(row, 19).value = dados_atualizados['Subsídio Alimentação Diário']
+                    break
+            
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+            dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
+            return True
+    except Exception as e:
+        st.error(f"Erro ao atualizar: {e}")
+        return False
 def carregar_horas_extras(empresa, mes, ano):
     try:
         _, response = dbx.files_download(EMPRESAS[empresa]["path"])
@@ -147,51 +175,97 @@ menu = st.sidebar.radio(
 if menu == "⚙️ Configurações":
     st.header("⚙️ Configurações do Sistema")
     
-    col1, col2 = st.columns(2)
+    tab_config1, tab_config2 = st.tabs(["💶 Sistema", "👥 Colaboradores"])
     
-    with col1:
-        st.subheader("💶 Salário Mínimo Nacional")
-        novo_salario = st.number_input(
-            "Valor atual (€)",
-            min_value=0.0,
-            value=st.session_state.salario_minimo,
-            step=10.0,
-            format="%.2f"
-        )
-        if st.button("Atualizar Salário Mínimo"):
-            st.session_state.salario_minimo = novo_salario
-            st.success(f"✅ Salário mínimo atualizado para {novo_salario}€")
-    
-    with col2:
-        st.subheader("📅 Feriados Municipais")
-        st.caption("Adicione até 3 feriados municipais")
+    with tab_config1:
+        col1, col2 = st.columns(2)
         
-        feriados_temp = []
-        for i in range(3):
-            feriado = st.date_input(
-                f"Feriado Municipal {i+1}",
-                value=st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None,
-                key=f"feriado_{i}"
+        with col1:
+            st.subheader("💶 Salário Mínimo Nacional")
+            novo_salario = st.number_input(
+                "Valor atual (€)",
+                min_value=0.0,
+                value=st.session_state.salario_minimo,
+                step=10.0,
+                format="%.2f"
             )
-            if feriado:
-                feriados_temp.append(feriado)
+            if st.button("Atualizar Salário Mínimo"):
+                st.session_state.salario_minimo = novo_salario
+                st.success(f"✅ Salário mínimo atualizado para {novo_salario}€")
         
-        if st.button("Atualizar Feriados"):
-            st.session_state.feriados_municipais = feriados_temp
-            st.success(f"✅ {len(feriados_temp)} feriados municipais configurados")
+        with col2:
+            st.subheader("📅 Feriados Municipais")
+            st.caption("Adicione até 3 feriados municipais")
+            
+            feriados_temp = []
+            for i in range(3):
+                feriado = st.date_input(
+                    f"Feriado Municipal {i+1}",
+                    value=st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None,
+                    key=f"feriado_{i}"
+                )
+                if feriado:
+                    feriados_temp.append(feriado)
+            
+            if st.button("Atualizar Feriados"):
+                st.session_state.feriados_municipais = feriados_temp
+                st.success(f"✅ {len(feriados_temp)} feriados municipais configurados")
+        
+        st.markdown("---")
+        st.subheader("📋 Feriados Nacionais 2025")
+        st.dataframe(
+            pd.DataFrame({
+                "Data": [f.strftime("%d/%m/%Y") for f in FERIADOS_NACIONAIS_2025],
+                "Descrição": ["Ano Novo", "Sexta-feira Santa", "Páscoa", "25 de Abril", 
+                             "Dia do Trabalhador", "Dia de Portugal", "Corpo de Deus",
+                             "Assunção", "Implantação República", "Todos os Santos",
+                             "Restauração", "Imaculada Conceição", "Natal"]
+            }),
+            use_container_width=True
+        )
     
-    st.markdown("---")
-    st.subheader("📋 Feriados Nacionais 2025")
-    st.dataframe(
-        pd.DataFrame({
-            "Data": [f.strftime("%d/%m/%Y") for f in FERIADOS_NACIONAIS_2025],
-            "Descrição": ["Ano Novo", "Sexta-feira Santa", "Páscoa", "25 de Abril", 
-                         "Dia do Trabalhador", "Dia de Portugal", "Corpo de Deus",
-                         "Assunção", "Implantação República", "Todos os Santos",
-                         "Restauração", "Imaculada Conceição", "Natal"]
-        }),
-        use_container_width=True
-    )
+    with tab_config2:
+        st.subheader("👥 Editar Dados de Colaboradores")
+        
+        empresa_config = st.selectbox(
+            "Empresa",
+            options=list(EMPRESAS.keys()),
+            key="empresa_config"
+        )
+        
+        df_colab_config = carregar_colaboradores(empresa_config)
+        
+        if not df_colab_config.empty:
+            colaborador_config = st.selectbox(
+                "Colaborador",
+                options=df_colab_config['Nome Completo'].tolist(),
+                key="colab_config"
+            )
+            
+            dados_atual = df_colab_config[df_colab_config['Nome Completo'] == colaborador_config].iloc[0]
+            
+            st.markdown("---")
+            
+            with st.form("form_editar_colab"):
+                st.markdown(f"### Editar: {colaborador_config}")
+                
+                novo_sub_alim = st.number_input(
+                    "Subsídio de Alimentação Diário (€)",
+                    min_value=0.0,
+                    value=float(dados_atual.get('Subsídio Alimentação Diário', 0)),
+                    step=0.10,
+                    format="%.2f"
+                )
+                
+                if st.form_submit_button("💾 Guardar Alterações"):
+                    if atualizar_colaborador_dropbox(
+                        empresa_config,
+                        colaborador_config,
+                        {'Subsídio Alimentação Diário': novo_sub_alim}
+                    ):
+                        st.success("✅ Dados atualizados com sucesso!")
+                    else:
+                        st.error("❌ Erro ao atualizar dados")
 
 # PÁGINA DE PROCESSAMENTO
 elif menu == "💼 Processar Salários":
@@ -245,8 +319,20 @@ elif menu == "💼 Processar Salários":
     st.subheader("👤 Selecionar Colaborador")
     colaborador_selecionado = st.selectbox(
         "Nome",
-        options=df_colaboradores['Nome Completo'].tolist()
+        options=df_colaboradores['Nome Completo'].tolist(),
+        key=f"colab_proc_{empresa_selecionada}_{mes_selecionado}_{ano_selecionado}"
     )
+    
+    # Chave única para dados deste colaborador/mês
+    chave_dados = f"{empresa_selecionada}_{colaborador_selecionado}_{mes_selecionado}_{ano_selecionado}"
+    
+    # Inicializar dados se não existir
+    if chave_dados not in st.session_state.dados_processamento:
+        st.session_state.dados_processamento[chave_dados] = {
+            'faltas': [], 'ferias': [], 'baixas': [],
+            'sub_ferias': 'Duodécimos', 'sub_natal': 'Duodécimos',
+            'desconto_especie': False, 'h_extra': 0
+        }
     
     # Obter dados do colaborador
     dados_colab = df_colaboradores[df_colaboradores['Nome Completo'] == colaborador_selecionado].iloc[0]
@@ -270,9 +356,20 @@ elif menu == "💼 Processar Salários":
         
         with col2:
             st.markdown("#### 🏖️ Subsídios")
-            sub_ferias = st.selectbox("Subsídio de Férias", ["Duodécimos", "Total"])
-            sub_natal = st.selectbox("Subsídio de Natal", ["Duodécimos", "Total"])
-            desconto_especie = st.checkbox("Desconto em espécie (cartão refeição)")
+            sub_ferias = st.selectbox(
+                "Subsídio de Férias",
+                ["Duodécimos", "Total"],
+                index=0 if st.session_state.dados_processamento[chave_dados]['sub_ferias'] == 'Duodécimos' else 1
+            )
+            sub_natal = st.selectbox(
+                "Subsídio de Natal",
+                ["Duodécimos", "Total"],
+                index=0 if st.session_state.dados_processamento[chave_dados]['sub_natal'] == 'Duodécimos' else 1
+            )
+            desconto_especie = st.checkbox(
+                "Desconto em espécie (cartão refeição)",
+                value=st.session_state.dados_processamento[chave_dados]['desconto_especie']
+            )
         
         st.markdown("#### 📅 Faltas, Férias e Baixas")
         
@@ -395,10 +492,24 @@ elif menu == "💼 Processar Salários":
                     total_dias += dias_periodo
                     # Contar dias úteis (excluindo fins de semana e feriados)
                     for i in range(dias_periodo):
-                        dia = inicio + pd.Timedelta(days=i)
-                        if dia.weekday() < 5 and dia.date() not in todos_feriados:
+                        dia = inicio + timedelta(days=i)
+                        if dia.weekday() < 5 and dia not in todos_feriados:
                             dias_uteis += 1
                 return total_dias, dias_uteis
+            
+            # Guardar dados no session_state
+            st.session_state.dados_processamento[chave_dados] = {
+                'faltas': faltas_periodos,
+                'ferias': ferias_periodos,
+                'baixas': baixas_periodos,
+                'sub_ferias': sub_ferias,
+                'sub_natal': sub_natal,
+                'desconto_especie': desconto_especie,
+                'h_extra': h_extra,
+                'h_noturnas': h_noturnas,
+                'h_domingos': h_domingos,
+                'h_feriados': h_feriados
+            }
             
             dias_faltas, dias_faltas_uteis = contar_dias(faltas_periodos)
             dias_ferias, dias_ferias_uteis = contar_dias(ferias_periodos)
