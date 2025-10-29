@@ -10,7 +10,7 @@ import calendar
 import time
 
 st.set_page_config(
-    page_title="Processamento Salarial v2.8",
+    page_title="Processamento Salarial v3.0",
     page_icon="💰",
     layout="wide"
 )
@@ -72,7 +72,7 @@ COLUNAS_SNAPSHOT = [
     "Número Pingo Doce", "Salário Bruto", "Vencimento Hora", 
     "Estado Civil", "Nº Titulares", "Nº Dependentes", "Deficiência",
     "IRS Percentagem Fixa", "IRS Modo Calculo",
-    "Cartão Refeição",
+    "Cartão Refeição", "Sub Férias Tipo", "Sub Natal Tipo", "Desconto em Espécie",
     "Status", "Data Rescisão", "Motivo Rescisão", 
     "NIF", "NISS", "Data de Admissão", "IBAN", "Secção", "Timestamp"
 ]
@@ -80,6 +80,11 @@ COLUNAS_SNAPSHOT = [
 COLUNAS_FALTAS_BAIXAS = [
     "Nome Completo", "Ano", "Mês", "Tipo", "Data Início", "Data Fim", 
     "Dias Úteis", "Dias Totais", "Observações", "Ficheiro Anexo", "Timestamp"
+]
+
+COLUNAS_HORAS_EXTRAS = [
+    "Nome Completo", "Ano", "Mês", "Horas Noturnas", "Horas Domingos", 
+    "Horas Feriados", "Horas Extra", "Outros Proveitos", "Observações", "Timestamp"
 ]
 
 ESTADOS_CIVIS = ["Solteiro", "Casado Único Titular", "Casado Dois Titulares"]
@@ -181,6 +186,22 @@ def normalizar_percentagem_irs(valor):
     except:
         return 0.0
 
+def normalizar_sim_nao(valor):
+    if pd.isna(valor) or valor == '':
+        return "Não"
+    valor_str = str(valor).strip()
+    if valor_str in ["Sim", "sim", "S", "s", "Yes", "yes", "Y", "y"]:
+        return "Sim"
+    return "Não"
+
+def normalizar_tipo_subsidio(valor):
+    if pd.isna(valor) or valor == '':
+        return "Duodécimos"
+    valor_str = str(valor).strip()
+    if valor_str in ["Total", "total", "T"]:
+        return "Total"
+    return "Duodécimos"
+
 # ==================== FUNÇÕES DROPBOX ====================
 
 def get_nome_aba_snapshot(ano, mes):
@@ -188,6 +209,9 @@ def get_nome_aba_snapshot(ano, mes):
 
 def get_nome_aba_faltas_baixas(ano, mes):
     return f"Faltas_Baixas_{ano}_{mes:02d}"
+
+def get_nome_aba_horas_extras(ano, mes):
+    return f"Extras_{ano}_{mes:02d}"
 
 def criar_pasta_dropbox(path):
     """Cria pasta na Dropbox se não existir"""
@@ -284,15 +308,6 @@ def upload_excel_seguro(empresa, wb):
 
 # ==================== FUNÇÕES DE CÁLCULO ====================
 
-def calcular_salario_base(horas_semana, salario_minimo):
-    if horas_semana == 40:
-        return salario_minimo
-    elif horas_semana == 20:
-        return salario_minimo / 2
-    elif horas_semana == 16:
-        return salario_minimo * 0.4
-    return salario_minimo * (horas_semana / 40)
-
 def calcular_vencimento_hora(salario_bruto, horas_semana):
     if horas_semana == 0:
         return 0
@@ -386,6 +401,18 @@ def carregar_dados_base(empresa):
             
             df.loc[df['Status'].isna() | (df['Status'] == ''), 'Status'] = 'Ativo'
             
+            # Garantir que Salário Bruto existe
+            if 'Salário Bruto' not in df.columns:
+                df['Salário Bruto'] = 870.0
+            
+            # Garantir campos novos
+            if 'Sub Férias Tipo' not in df.columns:
+                df['Sub Férias Tipo'] = 'Duodécimos'
+            if 'Sub Natal Tipo' not in df.columns:
+                df['Sub Natal Tipo'] = 'Duodécimos'
+            if 'Desconto em Espécie' not in df.columns:
+                df['Desconto em Espécie'] = 'Não'
+            
             return df
         except Exception as e:
             st.error(f"❌ Erro ao ler aba Colaboradores: {e}")
@@ -472,6 +499,8 @@ def garantir_coluna_status(empresa):
         
         df = pd.read_excel(excel_file, sheet_name="Colaboradores")
         
+        alterado = False
+        
         if 'Status' not in df.columns:
             st.info("🔧 Adicionando coluna 'Status'...")
             df['Status'] = 'Ativo'
@@ -482,8 +511,27 @@ def garantir_coluna_status(empresa):
                 st.info(f"🔧 Preenchendo {status_vazios.sum()} registos...")
                 df.loc[status_vazios, 'Status'] = 'Ativo'
                 alterado = True
-            else:
-                alterado = False
+        
+        # Garantir novos campos
+        if 'Salário Bruto' not in df.columns:
+            st.info("🔧 Adicionando coluna 'Salário Bruto'...")
+            df['Salário Bruto'] = 870.0
+            alterado = True
+        
+        if 'Sub Férias Tipo' not in df.columns:
+            st.info("🔧 Adicionando coluna 'Sub Férias Tipo'...")
+            df['Sub Férias Tipo'] = 'Duodécimos'
+            alterado = True
+        
+        if 'Sub Natal Tipo' not in df.columns:
+            st.info("🔧 Adicionando coluna 'Sub Natal Tipo'...")
+            df['Sub Natal Tipo'] = 'Duodécimos'
+            alterado = True
+        
+        if 'Desconto em Espécie' not in df.columns:
+            st.info("🔧 Adicionando coluna 'Desconto em Espécie'...")
+            df['Desconto em Espécie'] = 'Não'
+            alterado = True
         
         if alterado:
             if "Colaboradores" in wb.sheetnames:
@@ -497,7 +545,7 @@ def garantir_coluna_status(empresa):
                 ws.append(r)
             
             if upload_excel_seguro(empresa, wb):
-                st.success("✅ Coluna Status adicionada/atualizada!")
+                st.success("✅ Colunas adicionadas/atualizadas!")
                 return True
         
         return True
@@ -515,7 +563,7 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     
     dados = dados_colab.iloc[0]
     horas_semana = float(dados.get('Nº Horas/Semana', 40))
-    salario_bruto = calcular_salario_base(horas_semana, st.session_state.salario_minimo)
+    salario_bruto = float(dados.get('Salário Bruto', 870.0))
     
     estado_civil_raw = dados.get('Estado Civil', 'Solteiro')
     estado_civil = normalizar_estado_civil(estado_civil_raw)
@@ -529,9 +577,10 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     deficiencia_raw = dados.get('Pessoa com Deficiência', 'Não')
     deficiencia = normalizar_deficiencia(deficiencia_raw)
     
-    cartao_refeicao = dados.get('Cartão Refeição', 'Não')
-    if pd.isna(cartao_refeicao) or cartao_refeicao == '':
-        cartao_refeicao = 'Não'
+    cartao_refeicao = normalizar_sim_nao(dados.get('Cartão Refeição', 'Não'))
+    sub_ferias_tipo = normalizar_tipo_subsidio(dados.get('Sub Férias Tipo', 'Duodécimos'))
+    sub_natal_tipo = normalizar_tipo_subsidio(dados.get('Sub Natal Tipo', 'Duodécimos'))
+    desconto_especie = normalizar_sim_nao(dados.get('Desconto em Espécie', 'Não'))
     
     status = dados.get('Status', 'Ativo')
     
@@ -550,7 +599,10 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Deficiência": deficiencia,
         "IRS Percentagem Fixa": perc_irs,
         "IRS Modo Calculo": tipo_irs,
-        "Cartão Refeição": str(cartao_refeicao),
+        "Cartão Refeição": cartao_refeicao,
+        "Sub Férias Tipo": sub_ferias_tipo,
+        "Sub Natal Tipo": sub_natal_tipo,
+        "Desconto em Espécie": desconto_especie,
         "Status": status,
         "Data Rescisão": "",
         "Motivo Rescisão": "",
@@ -594,16 +646,18 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['Subsídio Alimentação Diário'] = float(dados.get('Subsídio Alimentação Diário', snapshot.get('Subsídio Alimentação Diário', 5.96)))
                     snapshot['Número Pingo Doce'] = str(dados.get('Número Pingo Doce', snapshot.get('Número Pingo Doce', '')))
                     
-                    # Cartão Refeição
-                    cartao_ref = dados.get('Cartão Refeição', snapshot.get('Cartão Refeição', 'Não'))
-                    if pd.isna(cartao_ref) or cartao_ref == '':
-                        cartao_ref = 'Não'
-                    snapshot['Cartão Refeição'] = str(cartao_ref)
+                    # Salário Bruto individual
+                    snapshot['Salário Bruto'] = float(dados.get('Salário Bruto', snapshot.get('Salário Bruto', 870.0)))
                     
-                    # Recalcular salário com base nas horas atualizadas
+                    # Recalcular vencimento hora
                     horas = float(snapshot['Nº Horas/Semana'])
-                    snapshot['Salário Bruto'] = calcular_salario_base(horas, st.session_state.salario_minimo)
                     snapshot['Vencimento Hora'] = calcular_vencimento_hora(snapshot['Salário Bruto'], horas)
+                    
+                    # Campos novos
+                    snapshot['Cartão Refeição'] = normalizar_sim_nao(dados.get('Cartão Refeição', snapshot.get('Cartão Refeição', 'Não')))
+                    snapshot['Sub Férias Tipo'] = normalizar_tipo_subsidio(dados.get('Sub Férias Tipo', snapshot.get('Sub Férias Tipo', 'Duodécimos')))
+                    snapshot['Sub Natal Tipo'] = normalizar_tipo_subsidio(dados.get('Sub Natal Tipo', snapshot.get('Sub Natal Tipo', 'Duodécimos')))
+                    snapshot['Desconto em Espécie'] = normalizar_sim_nao(dados.get('Desconto em Espécie', snapshot.get('Desconto em Espécie', 'Não')))
                     
                     # Atualizar dados IRS
                     snapshot['Estado Civil'] = normalizar_estado_civil(dados.get('Estado Civil', snapshot.get('Estado Civil', 'Solteiro')))
@@ -756,6 +810,52 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         st.error(f"❌ Erro ao gravar: {e}")
         return False
 
+def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, h_feriados, h_extra, outros_prov, obs):
+    """Grava registo de horas extras e outros proveitos"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return False
+        
+        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        
+        # Verificar integridade
+        if "Colaboradores" not in wb.sheetnames:
+            st.error("🚨 ERRO: Aba Colaboradores não encontrada!")
+            return False
+        
+        nome_aba = get_nome_aba_horas_extras(ano, mes)
+        garantir_aba(wb, nome_aba, COLUNAS_HORAS_EXTRAS)
+        
+        ws = wb[nome_aba]
+        
+        # Nova linha
+        nova_linha = [
+            colaborador,
+            ano,
+            mes,
+            h_noturnas,
+            h_domingos,
+            h_feriados,
+            h_extra,
+            outros_prov,
+            obs,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]
+        
+        ws.append(nova_linha)
+        
+        # Upload com segurança
+        if upload_excel_seguro(empresa, wb):
+            st.success(f"✅ Horas extras/proveitos registados")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao gravar: {e}")
+        return False
+
 def carregar_faltas_baixas(empresa, ano, mes, colaborador=None):
     """Carrega faltas e baixas do mês"""
     try:
@@ -764,6 +864,29 @@ def carregar_faltas_baixas(empresa, ano, mes, colaborador=None):
             return pd.DataFrame()
         
         nome_aba = get_nome_aba_faltas_baixas(ano, mes)
+        
+        try:
+            df = pd.read_excel(excel_file, sheet_name=nome_aba)
+            
+            if colaborador:
+                df = df[df['Nome Completo'] == colaborador]
+            
+            return df
+        except:
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"❌ Erro: {e}")
+        return pd.DataFrame()
+
+def carregar_horas_extras(empresa, ano, mes, colaborador=None):
+    """Carrega horas extras do mês"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return pd.DataFrame()
+        
+        nome_aba = get_nome_aba_horas_extras(ano, mes)
         
         try:
             df = pd.read_excel(excel_file, sheet_name=nome_aba)
@@ -795,7 +918,6 @@ def atualizar_campo_colaborador(empresa, colaborador, ano, mes, campo, novo_valo
     
     if campo == "Nº Horas/Semana":
         horas = float(novo_valor)
-        snapshot['Salário Bruto'] = calcular_salario_base(horas, st.session_state.salario_minimo)
         snapshot['Vencimento Hora'] = calcular_vencimento_hora(snapshot['Salário Bruto'], horas)
     
     return gravar_snapshot(empresa, snapshot)
@@ -842,27 +964,6 @@ def processar_calculo_salario(dados_form):
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
     
-    # ✅ LÓGICA CORRETA - Base IRS SEMPRE inclui subsídios (duodécimos OU total)
-    # 
-    # Exemplos práticos:
-    # 
-    # DUODÉCIMOS (mês normal):
-    #   Salário: 870€ | Sub. Férias: 72.50€ | Sub. Natal: 72.50€
-    #   Base IRS = 870 + 72.50 + 72.50 = 1.015€
-    # 
-    # TOTAL - Junho (férias pagas):
-    #   Salário: 870€ | Sub. Férias: 870€ | Sub. Natal: 72.50€
-    #   Base IRS = 870 + 870 + 72.50 = 1.812,50€
-    # 
-    # TOTAL - Dezembro (natal pago):
-    #   Salário: 870€ | Sub. Férias: 72.50€ | Sub. Natal: 870€
-    #   Base IRS = 870 + 72.50 + 870 = 1.812,50€
-    # 
-    # TOTAL - Ambos no mesmo mês:
-    #   Salário: 870€ | Sub. Férias: 870€ | Sub. Natal: 870€
-    #   Base IRS = 870 + 870 + 870 = 2.610€
-    # 
-    # Em TODOS os cenários, os subsídios pagos são incluídos na base IRS!
     base_irs = salario_bruto + sub_ferias + sub_natal
     
     irs = calcular_irs(
@@ -877,12 +978,9 @@ def processar_calculo_salario(dados_form):
     # Cartão Refeição ou Desconto em Espécie
     desconto_especie = 0
     cartao_refeicao = dados_form.get('cartao_refeicao', False)
+    desconto_esp_ativo = dados_form.get('desconto_especie', False)
     
-    if cartao_refeicao:
-        # Se pago via cartão, desconta o subsídio (não é pago em dinheiro)
-        desconto_especie = sub_alimentacao
-    elif dados_form.get('desconto_especie', False):
-        # Desconto em espécie tradicional
+    if cartao_refeicao or desconto_esp_ativo:
         desconto_especie = sub_alimentacao
     
     total_descontos = seg_social + irs + desconto_especie
@@ -943,8 +1041,8 @@ def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v2.8")
-st.caption("✨ NOVO: Gestão de faltas/baixas com datas + Upload de documentos + Rescisões completo")
+st.title("💰 Processamento Salarial v3.0")
+st.caption("✨ NOVO: Salário Bruto Individual + Configurações de Subsídios + Histórico de Extras")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -960,39 +1058,23 @@ menu = st.sidebar.radio(
 if menu == "⚙️ Configurações":
     st.header("⚙️ Configurações do Sistema")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["💶 Sistema", "👥 Colaboradores", "⏰ Horários", "📋 Dados IRS", "🔧 Migrar Status"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["💶 Feriados", "👥 Colaboradores", "⏰ Horários", "📋 Dados IRS", "🔧 Migrar Colunas"])
     
     with tab1:
-        col1, col2 = st.columns(2)
+        st.subheader("📅 Feriados Municipais")
+        feriados_temp = []
+        for i in range(3):
+            valor_default = st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None
+            feriado = st.date_input(f"Feriado {i+1}", value=valor_default, key=f"fer_{i}")
+            if feriado:
+                feriados_temp.append(feriado)
         
-        with col1:
-            st.subheader("💶 Salário Mínimo Nacional")
-            novo_salario = st.number_input(
-                "Valor atual (€)",
-                min_value=0.0,
-                value=st.session_state.salario_minimo,
-                step=10.0,
-                format="%.2f"
-            )
-            if st.button("💾 Atualizar SMN"):
-                st.session_state.salario_minimo = novo_salario
-                st.success(f"✅ SMN: {novo_salario}€")
-        
-        with col2:
-            st.subheader("📅 Feriados Municipais")
-            feriados_temp = []
-            for i in range(3):
-                valor_default = st.session_state.feriados_municipais[i] if i < len(st.session_state.feriados_municipais) else None
-                feriado = st.date_input(f"Feriado {i+1}", value=valor_default, key=f"fer_{i}")
-                if feriado:
-                    feriados_temp.append(feriado)
-            
-            if st.button("💾 Atualizar Feriados"):
-                st.session_state.feriados_municipais = feriados_temp
-                st.success(f"✅ {len(feriados_temp)} feriados")
+        if st.button("💾 Atualizar Feriados"):
+            st.session_state.feriados_municipais = feriados_temp
+            st.success(f"✅ {len(feriados_temp)} feriados")
     
     with tab2:
-        st.subheader("👥 Editar Dados")
+        st.subheader("👥 Editar Dados dos Colaboradores")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1027,29 +1109,64 @@ if menu == "⚙️ Configurações":
             
             if snap:
                 st.markdown("---")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("💰 Subsídio", f"{snap['Subsídio Alimentação Diário']:.2f}€")
-                col2.metric("⏰ Horas", f"{snap['Nº Horas/Semana']:.0f}h")
-                col3.metric("🔢 Nº Pingo", snap.get('Número Pingo Doce', ''))
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("💰 Salário Bruto", f"{snap['Salário Bruto']:.2f}€")
+                col2.metric("🍽️ Subsídio", f"{snap['Subsídio Alimentação Diário']:.2f}€")
+                col3.metric("⏰ Horas", f"{snap['Nº Horas/Semana']:.0f}h")
+                col4.metric("🔢 Nº Pingo", snap.get('Número Pingo Doce', ''))
                 
-                # Mostrar status cartão refeição
+                # Mostrar configurações atuais
+                col1, col2, col3, col4 = st.columns(4)
                 cartao_ref = snap.get('Cartão Refeição', 'Não')
                 if cartao_ref == 'Sim':
-                    st.info("💳 Subsídio pago em Cartão de Refeição")
+                    col1.info("💳 Cartão Refeição")
+                
+                desc_esp = snap.get('Desconto em Espécie', 'Não')
+                if desc_esp == 'Sim':
+                    col2.info("☑️ Desc. Espécie")
+                
+                col3.info(f"🏖️ Férias: {snap.get('Sub Férias Tipo', 'Duodécimos')}")
+                col4.info(f"🎄 Natal: {snap.get('Sub Natal Tipo', 'Duodécimos')}")
                 
                 with st.form("form_edit"):
+                    st.markdown("### 💶 Dados Financeiros")
                     col1, col2 = st.columns(2)
                     with col1:
-                        novo_sub = st.number_input("Novo Subsídio (€)", min_value=0.0,
+                        novo_salario = st.number_input("💰 Salário Bruto (€)", min_value=0.0,
+                                                      value=float(snap['Salário Bruto']),
+                                                      step=10.0, format="%.2f",
+                                                      help="Salário base individual do colaborador")
+                        novo_sub = st.number_input("🍽️ Subsídio Alimentação (€)", min_value=0.0,
                                                   value=float(snap['Subsídio Alimentação Diário']),
                                                   step=0.10, format="%.2f")
+                    with col2:
+                        novo_num = st.text_input("🔢 Número Pingo Doce", value=str(snap.get('Número Pingo Doce', '')))
+                    
+                    st.markdown("### 🏖️ Configurações de Subsídios")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        sub_ferias_tipo = st.selectbox("Subsídio de Férias", 
+                                                      ["Duodécimos", "Total"],
+                                                      index=0 if snap.get('Sub Férias Tipo', 'Duodécimos') == 'Duodécimos' else 1,
+                                                      help="Duodécimos = 1/12 por mês | Total = valor completo")
+                    with col2:
+                        sub_natal_tipo = st.selectbox("Subsídio de Natal", 
+                                                     ["Duodécimos", "Total"],
+                                                     index=0 if snap.get('Sub Natal Tipo', 'Duodécimos') == 'Duodécimos' else 1,
+                                                     help="Duodécimos = 1/12 por mês | Total = valor completo")
+                    
+                    st.markdown("### ☑️ Descontos e Pagamentos")
+                    col1, col2 = st.columns(2)
+                    with col1:
                         cartao_refeicao = st.checkbox("💳 Pagar em Cartão de Refeição", 
                                                      value=cartao_ref == 'Sim',
                                                      help="Subsídio reconhecido mas não pago em dinheiro (via cartão)")
                     with col2:
-                        novo_num = st.text_input("Novo Nº Pingo", value=str(snap.get('Número Pingo Doce', '')))
+                        desconto_especie = st.checkbox("☑️ Desconto em Espécie", 
+                                                      value=desc_esp == 'Sim',
+                                                      help="Subsídio reconhecido mas descontado (não pago)")
                     
-                    submit = st.form_submit_button("💾 GUARDAR", use_container_width=True, type="primary")
+                    submit = st.form_submit_button("💾 GUARDAR TUDO", use_container_width=True, type="primary")
                     
                     if submit:
                         # Atualizar na aba Colaboradores
@@ -1058,9 +1175,13 @@ if menu == "⚙️ Configurações":
                         wb = load_workbook(excel_file, data_only=False)
                         
                         mask = df_base['Nome Completo'] == colab_sel
+                        df_base.loc[mask, 'Salário Bruto'] = novo_salario
                         df_base.loc[mask, 'Subsídio Alimentação Diário'] = novo_sub
                         df_base.loc[mask, 'Número Pingo Doce'] = novo_num
                         df_base.loc[mask, 'Cartão Refeição'] = 'Sim' if cartao_refeicao else 'Não'
+                        df_base.loc[mask, 'Desconto em Espécie'] = 'Sim' if desconto_especie else 'Não'
+                        df_base.loc[mask, 'Sub Férias Tipo'] = sub_ferias_tipo
+                        df_base.loc[mask, 'Sub Natal Tipo'] = sub_natal_tipo
                         
                         # Reescrever aba Colaboradores
                         if "Colaboradores" in wb.sheetnames:
@@ -1074,10 +1195,9 @@ if menu == "⚙️ Configurações":
                             ws.append(r)
                         
                         if upload_excel_seguro(emp, wb):
-                            st.success("✅ Dados atualizados na aba Colaboradores!")
-                            if cartao_refeicao:
-                                st.info("💳 Cartão de Refeição ativado - subsídio não será pago em dinheiro")
+                            st.success("✅ Todos os dados atualizados!")
                             st.info("💡 Mudanças serão refletidas no próximo processamento")
+                            st.balloons()
                             time.sleep(2)
                             st.rerun()
         else:
@@ -1123,8 +1243,8 @@ if menu == "⚙️ Configurações":
                 venc_hora_atual = float(snap_hor['Vencimento Hora'])
                 
                 col1.metric("⏰ Horas Atuais", f"{horas_atuais:.0f}h/semana")
-                col2.metric("💰 Salário Bruto Atual", f"{salario_atual:.2f}€")
-                col3.metric("💵 Vencimento/Hora Atual", f"{venc_hora_atual:.2f}€")
+                col2.metric("💰 Salário Bruto", f"{salario_atual:.2f}€")
+                col3.metric("💵 Vencimento/Hora", f"{venc_hora_atual:.2f}€")
                 
                 st.markdown("---")
                 
@@ -1141,13 +1261,11 @@ if menu == "⚙️ Configurações":
                         )
                     
                     with col2:
-                        novo_salario = calcular_salario_base(novas_horas, st.session_state.salario_minimo)
-                        novo_venc_hora = calcular_vencimento_hora(novo_salario, novas_horas)
+                        novo_venc_hora = calcular_vencimento_hora(salario_atual, novas_horas)
                         
-                        st.metric("💰 Novo Salário Bruto", f"{novo_salario:.2f}€",
-                                 delta=f"{novo_salario - salario_atual:.2f}€")
                         st.metric("💵 Novo Vencimento/Hora", f"{novo_venc_hora:.2f}€",
                                  delta=f"{novo_venc_hora - venc_hora_atual:.2f}€")
+                        st.caption("(Salário mantém-se o mesmo)")
                     
                     submit_hor = st.form_submit_button("💾 CONFIRMAR", use_container_width=True, type="primary")
                     
@@ -1175,8 +1293,8 @@ if menu == "⚙️ Configurações":
                                 ws.append(r)
                             
                             if upload_excel_seguro(emp_hor, wb):
-                                st.success("✅ Horário atualizado na aba Colaboradores!")
-                                st.info("💡 Novo salário será calculado no próximo processamento")
+                                st.success("✅ Horário atualizado!")
+                                st.info("💡 Vencimento/hora será recalculado no próximo processamento")
                                 st.balloons()
                                 time.sleep(2)
                                 st.rerun()
@@ -1265,7 +1383,7 @@ if menu == "⚙️ Configurações":
                             ws.append(r)
                         
                         if upload_excel_seguro(emp_irs, wb):
-                            st.success("✅ Dados IRS atualizados na aba Colaboradores!")
+                            st.success("✅ Dados IRS atualizados!")
                             st.balloons()
                             time.sleep(2)
                             st.rerun()
@@ -1273,8 +1391,9 @@ if menu == "⚙️ Configurações":
             st.warning("⚠️ Nenhum colaborador ativo")
     
     with tab5:
-        st.subheader("🔧 Migração: Adicionar Coluna Status")
-        st.info("Execute isto UMA VEZ por empresa para adicionar coluna Status")
+        st.subheader("🔧 Migração: Adicionar Novas Colunas")
+        st.info("Execute isto UMA VEZ por empresa para adicionar novas colunas")
+        st.warning("⚠️ Esta operação adiciona: Salário Bruto, Sub Férias Tipo, Sub Natal Tipo, Desconto em Espécie")
         
         emp_migrar = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_migrar")
         
@@ -1319,7 +1438,7 @@ elif menu == "🔧 Gestão Status":
                 
                 with col1:
                     st.write(f"**{nome}**")
-                    st.caption(f"Secção: {row.get('Secção', 'N/A')}")
+                    st.caption(f"Secção: {row.get('Secção', 'N/A')} | Salário: {row.get('Salário Bruto', 0):.2f}€")
                 
                 with col2:
                     if status_atual == 'Ativo':
@@ -1365,7 +1484,7 @@ elif menu == "💼 Processar Salários":
     
     if not colabs_proc:
         st.warning("⚠️ Nenhum colaborador ativo")
-        st.info("💡 Execute a migração em Configurações → Migrar Status")
+        st.info("💡 Execute a migração em Configurações → Migrar Colunas")
         st.stop()
     
     st.success(f"✅ {len(colabs_proc)} colaboradores ativos")
@@ -1397,7 +1516,7 @@ elif menu == "💼 Processar Salários":
     
     with st.expander("📋 DADOS BASE (atualizados das Configurações)", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💶 Salário Bruto", f"{salario_bruto:.2f}€")
+        col1.metric("💰 Salário Bruto", f"{salario_bruto:.2f}€")
         col2.metric("⏰ Horas/Semana", f"{horas_semana:.0f}h")
         col3.metric("💵 Vencimento/Hora", f"{vencimento_hora:.2f}€")
         col4.metric("🍽️ Sub. Alimentação", f"{subsidio_alim:.2f}€/dia")
@@ -1408,10 +1527,14 @@ elif menu == "💼 Processar Salários":
         col3.metric("👶 Dependentes", snap_proc.get('Nº Dependentes', 0))
         col4.metric("📊 Modo IRS", snap_proc.get('IRS Modo Calculo', 'Tabela'))
         
-        # Mostrar status cartão refeição
-        cartao_ref_ativo = snap_proc.get('Cartão Refeição', 'Não') == 'Sim'
-        if cartao_ref_ativo:
-            st.info("💳 **Cartão de Refeição ATIVO** - Subsídio será reconhecido mas não pago em dinheiro")
+        # Mostrar configurações ativas
+        col1, col2, col3, col4 = st.columns(4)
+        if snap_proc.get('Cartão Refeição', 'Não') == 'Sim':
+            col1.info("💳 Cartão Refeição")
+        if snap_proc.get('Desconto em Espécie', 'Não') == 'Sim':
+            col2.info("☑️ Desc. Espécie")
+        col3.info(f"🏖️ {snap_proc.get('Sub Férias Tipo', 'Duodécimos')}")
+        col4.info(f"🎄 {snap_proc.get('Sub Natal Tipo', 'Duodécimos')}")
     
     st.markdown("---")
     
@@ -1527,38 +1650,86 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # RESTO DO PROCESSAMENTO
-    cartao_ref_ativo = snap_proc.get('Cartão Refeição', 'Não') == 'Sim'
+    # HORAS EXTRAS E OUTROS PROVEITOS
+    st.subheader("⏰ Horas Extras e Outros Proveitos")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if cartao_ref_ativo:
-            st.info("💳 Cartão Refeição ativo")
-            desconto_especie = False  # Não mostrar checkbox
+    tab_registar, tab_historico_extras = st.tabs(["➕ Registar", "📜 Histórico"])
+    
+    with tab_registar:
+        with st.form("form_horas_extras"):
+            st.markdown("### Registar Horas Extras")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                h_not = st.number_input("🌙 Noturnas", min_value=0.0, value=0.0, step=0.5, key="reg_h_not")
+            with col2:
+                h_dom = st.number_input("📅 Domingos", min_value=0.0, value=0.0, step=0.5, key="reg_h_dom")
+            with col3:
+                h_fer = st.number_input("🎉 Feriados", min_value=0.0, value=0.0, step=0.5, key="reg_h_fer")
+            with col4:
+                h_ext = st.number_input("⚡ Extra", min_value=0.0, value=0.0, step=0.5, key="reg_h_ext")
+            
+            outros_prov = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0, key="reg_outros")
+            obs_extras = st.text_area("📝 Observações", key="obs_extras")
+            
+            submit_extras = st.form_submit_button("💾 REGISTAR EXTRAS", use_container_width=True, type="primary")
+            
+            if submit_extras:
+                if h_not == 0 and h_dom == 0 and h_fer == 0 and h_ext == 0 and outros_prov == 0:
+                    st.warning("⚠️ Nenhum valor foi preenchido!")
+                else:
+                    with st.spinner("A registar..."):
+                        if gravar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc,
+                                              h_not, h_dom, h_fer, h_ext, outros_prov, obs_extras):
+                            st.success("✅ Extras registados!")
+                            time.sleep(1)
+                            st.rerun()
+    
+    with tab_historico_extras:
+        st.markdown("### 📜 Histórico de Extras")
+        
+        df_extras = carregar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc)
+        
+        if not df_extras.empty:
+            st.dataframe(
+                df_extras[['Horas Noturnas', 'Horas Domingos', 'Horas Feriados', 'Horas Extra', 'Outros Proveitos', 'Observações']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Totais
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("🌙 Noturnas", f"{df_extras['Horas Noturnas'].sum():.1f}h")
+            col2.metric("📅 Domingos", f"{df_extras['Horas Domingos'].sum():.1f}h")
+            col3.metric("🎉 Feriados", f"{df_extras['Horas Feriados'].sum():.1f}h")
+            col4.metric("⚡ Extra", f"{df_extras['Horas Extra'].sum():.1f}h")
+            col5.metric("💰 Proveitos", f"{df_extras['Outros Proveitos'].sum():.2f}€")
         else:
-            desconto_especie = st.checkbox("☑️ Desconto em Espécie", 
-                                         help="Subsídio reconhecido mas não pago em dinheiro")
-    with col2:
-        sub_ferias = st.selectbox("🏖️ Sub. Férias", ["Duodécimos", "Total"])
-    with col3:
-        sub_natal = st.selectbox("🎄 Sub. Natal", ["Duodécimos", "Total"])
+            st.info("ℹ️ Sem registos para este mês")
     
     st.markdown("---")
     
-    st.subheader("⏰ Horas Extras")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        h_not = st.number_input("🌙 Noturnas", min_value=0.0, value=0.0, step=0.5)
-    with col2:
-        h_dom = st.number_input("📅 Domingos", min_value=0.0, value=0.0, step=0.5)
-    with col3:
-        h_fer = st.number_input("🎉 Feriados", min_value=0.0, value=0.0, step=0.5)
-    with col4:
-        h_ext = st.number_input("⚡ Extra", min_value=0.0, value=0.0, step=0.5)
+    # CARREGAR VALORES DO HISTÓRICO
+    df_extras_total = carregar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc)
     
-    st.markdown("---")
+    if not df_extras_total.empty:
+        h_not_total = float(df_extras_total['Horas Noturnas'].sum())
+        h_dom_total = float(df_extras_total['Horas Domingos'].sum())
+        h_fer_total = float(df_extras_total['Horas Feriados'].sum())
+        h_ext_total = float(df_extras_total['Horas Extra'].sum())
+        outros_prov_total = float(df_extras_total['Outros Proveitos'].sum())
+    else:
+        h_not_total = 0.0
+        h_dom_total = 0.0
+        h_fer_total = 0.0
+        h_ext_total = 0.0
+        outros_prov_total = 0.0
     
-    outros_prov = st.number_input("💰 Outros Proveitos c/ Descontos (€)", min_value=0.0, value=0.0)
+    # USAR VALORES DA ABA COLABORADORES
+    cartao_ref_ativo = snap_proc.get('Cartão Refeição', 'Não') == 'Sim'
+    desconto_especie_ativo = snap_proc.get('Desconto em Espécie', 'Não') == 'Sim'
+    sub_ferias_tipo = snap_proc.get('Sub Férias Tipo', 'Duodécimos')
+    sub_natal_tipo = snap_proc.get('Sub Natal Tipo', 'Duodécimos')
     
     st.markdown("---")
     
@@ -1569,15 +1740,15 @@ elif menu == "💼 Processar Salários":
         'dias_faltas': total_faltas_uteis,
         'dias_baixas': total_baixas_uteis,
         'dias_uteis_trabalhados': dias_uteis_trab,
-        'horas_noturnas': h_not,
-        'horas_domingos': h_dom,
-        'horas_feriados': h_fer,
-        'horas_extra': h_ext,
-        'sub_ferias_tipo': sub_ferias,
-        'sub_natal_tipo': sub_natal,
-        'desconto_especie': desconto_especie,
+        'horas_noturnas': h_not_total,
+        'horas_domingos': h_dom_total,
+        'horas_feriados': h_fer_total,
+        'horas_extra': h_ext_total,
+        'sub_ferias_tipo': sub_ferias_tipo,
+        'sub_natal_tipo': sub_natal_tipo,
+        'desconto_especie': desconto_especie_ativo,
         'cartao_refeicao': cartao_ref_ativo,
-        'outros_proveitos': outros_prov,
+        'outros_proveitos': outros_prov_total,
         'estado_civil': snap_proc.get('Estado Civil', 'Solteiro'),
         'num_dependentes': snap_proc.get('Nº Dependentes', 0),
         'tem_deficiencia': snap_proc.get('Deficiência', 'Não') == 'Sim',
@@ -1614,7 +1785,7 @@ elif menu == "💼 Processar Salários":
     }
     
     # Adicionar outros proveitos se existir
-    if outros_prov > 0:
+    if outros_prov_total > 0:
         dados_remuneracoes["Descrição"].append("Outros Proveitos")
         dados_remuneracoes["Valor (€)"].append(f"{resultado['outros_proveitos']:.2f}")
     
@@ -1800,13 +1971,12 @@ elif menu == "📊 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v2.8 ✨ MELHORIAS
-💶 SMN: {st.session_state.salario_minimo}€
-✅ Faltas/baixas com datas
-📤 Upload de documentos
-🚪 Rescisões completo
-🔄 Configurações sincronizadas
-✅ Base IRS: Duodécimos + Total""")
+st.sidebar.info(f"""v3.0 🚀 ATUALIZAÇÕES
+💰 Salário Bruto Individual
+🏖️ Subsídios configuráveis
+📊 Histórico de extras
+✅ Configurações unificadas
+💾 Tudo guardado no Excel""")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
