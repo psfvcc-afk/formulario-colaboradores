@@ -72,6 +72,7 @@ COLUNAS_SNAPSHOT = [
     "Número Pingo Doce", "Salário Bruto", "Vencimento Hora", 
     "Estado Civil", "Nº Titulares", "Nº Dependentes", "Deficiência",
     "IRS Percentagem Fixa", "IRS Modo Calculo",
+    "Cartão Refeição",
     "Status", "Data Rescisão", "Motivo Rescisão", 
     "NIF", "NISS", "Data de Admissão", "IBAN", "Secção", "Timestamp"
 ]
@@ -520,6 +521,10 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     deficiencia_raw = dados.get('Pessoa com Deficiência', 'Não')
     deficiencia = normalizar_deficiencia(deficiencia_raw)
     
+    cartao_refeicao = dados.get('Cartão Refeição', 'Não')
+    if pd.isna(cartao_refeicao) or cartao_refeicao == '':
+        cartao_refeicao = 'Não'
+    
     status = dados.get('Status', 'Ativo')
     
     snapshot = {
@@ -537,6 +542,7 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Deficiência": deficiencia,
         "IRS Percentagem Fixa": perc_irs,
         "IRS Modo Calculo": tipo_irs,
+        "Cartão Refeição": str(cartao_refeicao),
         "Status": status,
         "Data Rescisão": "",
         "Motivo Rescisão": "",
@@ -579,6 +585,12 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['Nº Horas/Semana'] = float(dados.get('Nº Horas/Semana', snapshot.get('Nº Horas/Semana', 40)))
                     snapshot['Subsídio Alimentação Diário'] = float(dados.get('Subsídio Alimentação Diário', snapshot.get('Subsídio Alimentação Diário', 5.96)))
                     snapshot['Número Pingo Doce'] = str(dados.get('Número Pingo Doce', snapshot.get('Número Pingo Doce', '')))
+                    
+                    # Cartão Refeição
+                    cartao_ref = dados.get('Cartão Refeição', snapshot.get('Cartão Refeição', 'Não'))
+                    if pd.isna(cartao_ref) or cartao_ref == '':
+                        cartao_ref = 'Não'
+                    snapshot['Cartão Refeição'] = str(cartao_ref)
                     
                     # Recalcular salário com base nas horas atualizadas
                     horas = float(snapshot['Nº Horas/Semana'])
@@ -831,7 +843,17 @@ def processar_calculo_salario(dados_form):
         tem_deficiencia=dados_form.get('tem_deficiencia', False)
     )
     
-    desconto_especie = sub_alimentacao if dados_form.get('desconto_especie', False) else 0
+    # Cartão Refeição ou Desconto em Espécie
+    desconto_especie = 0
+    cartao_refeicao = dados_form.get('cartao_refeicao', False)
+    
+    if cartao_refeicao:
+        # Se pago via cartão, desconta o subsídio (não é pago em dinheiro)
+        desconto_especie = sub_alimentacao
+    elif dados_form.get('desconto_especie', False):
+        # Desconto em espécie tradicional
+        desconto_especie = sub_alimentacao
+    
     total_descontos = seg_social + irs + desconto_especie
     
     liquido = total_remuneracoes - total_descontos
@@ -853,6 +875,7 @@ def processar_calculo_salario(dados_form):
         'base_irs': salario_bruto,
         'irs': irs,
         'desconto_especie': desconto_especie,
+        'cartao_refeicao': cartao_refeicao,
         'total_descontos': total_descontos,
         'liquido': liquido
     }
@@ -966,12 +989,20 @@ if menu == "⚙️ Configurações":
                 col2.metric("⏰ Horas", f"{snap['Nº Horas/Semana']:.0f}h")
                 col3.metric("🔢 Nº Pingo", snap.get('Número Pingo Doce', ''))
                 
+                # Mostrar status cartão refeição
+                cartao_ref = snap.get('Cartão Refeição', 'Não')
+                if cartao_ref == 'Sim':
+                    st.info("💳 Subsídio pago em Cartão de Refeição")
+                
                 with st.form("form_edit"):
                     col1, col2 = st.columns(2)
                     with col1:
                         novo_sub = st.number_input("Novo Subsídio (€)", min_value=0.0,
                                                   value=float(snap['Subsídio Alimentação Diário']),
                                                   step=0.10, format="%.2f")
+                        cartao_refeicao = st.checkbox("💳 Pagar em Cartão de Refeição", 
+                                                     value=cartao_ref == 'Sim',
+                                                     help="Subsídio reconhecido mas não pago em dinheiro (via cartão)")
                     with col2:
                         novo_num = st.text_input("Novo Nº Pingo", value=str(snap.get('Número Pingo Doce', '')))
                     
@@ -986,6 +1017,7 @@ if menu == "⚙️ Configurações":
                         mask = df_base['Nome Completo'] == colab_sel
                         df_base.loc[mask, 'Subsídio Alimentação Diário'] = novo_sub
                         df_base.loc[mask, 'Número Pingo Doce'] = novo_num
+                        df_base.loc[mask, 'Cartão Refeição'] = 'Sim' if cartao_refeicao else 'Não'
                         
                         # Reescrever aba Colaboradores
                         if "Colaboradores" in wb.sheetnames:
@@ -1000,6 +1032,8 @@ if menu == "⚙️ Configurações":
                         
                         if upload_excel_seguro(emp, wb):
                             st.success("✅ Dados atualizados na aba Colaboradores!")
+                            if cartao_refeicao:
+                                st.info("💳 Cartão de Refeição ativado - subsídio não será pago em dinheiro")
                             st.info("💡 Mudanças serão refletidas no próximo processamento")
                             time.sleep(2)
                             st.rerun()
@@ -1294,6 +1328,11 @@ elif menu == "💼 Processar Salários":
         col2.metric("👤 Estado Civil", snap_proc.get('Estado Civil', 'N/A'))
         col3.metric("👶 Dependentes", snap_proc.get('Nº Dependentes', 0))
         col4.metric("📊 Modo IRS", snap_proc.get('IRS Modo Calculo', 'Tabela'))
+        
+        # Mostrar status cartão refeição
+        cartao_ref_ativo = snap_proc.get('Cartão Refeição', 'Não') == 'Sim'
+        if cartao_ref_ativo:
+            st.info("💳 **Cartão de Refeição ATIVO** - Subsídio será reconhecido mas não pago em dinheiro")
     
     st.markdown("---")
     
@@ -1410,9 +1449,16 @@ elif menu == "💼 Processar Salários":
     st.markdown("---")
     
     # RESTO DO PROCESSAMENTO
+    cartao_ref_ativo = snap_proc.get('Cartão Refeição', 'Não') == 'Sim'
+    
     col1, col2, col3 = st.columns(3)
     with col1:
-        desconto_especie = st.checkbox("☑️ Desconto em Espécie")
+        if cartao_ref_ativo:
+            st.info("💳 Cartão Refeição ativo")
+            desconto_especie = False  # Não mostrar checkbox
+        else:
+            desconto_especie = st.checkbox("☑️ Desconto em Espécie", 
+                                         help="Subsídio reconhecido mas não pago em dinheiro")
     with col2:
         sub_ferias = st.selectbox("🏖️ Sub. Férias", ["Duodécimos", "Total"])
     with col3:
@@ -1451,6 +1497,7 @@ elif menu == "💼 Processar Salários":
         'sub_ferias_tipo': sub_ferias,
         'sub_natal_tipo': sub_natal,
         'desconto_especie': desconto_especie,
+        'cartao_refeicao': cartao_ref_ativo,
         'outros_proveitos': outros_prov,
         'estado_civil': snap_proc.get('Estado Civil', 'Solteiro'),
         'num_dependentes': snap_proc.get('Nº Dependentes', 0),
@@ -1507,8 +1554,11 @@ elif menu == "💼 Processar Salários":
         ]
     }
     
-    # Adicionar desconto espécie se existir
-    if desconto_especie:
+    # Adicionar desconto cartão refeição ou desconto espécie
+    if resultado.get('cartao_refeicao', False) and resultado['desconto_especie'] > 0:
+        dados_descontos["Descrição"].append("💳 Cartão Refeição")
+        dados_descontos["Valor (€)"].append(f"{resultado['desconto_especie']:.2f}")
+    elif resultado['desconto_especie'] > 0:
         dados_descontos["Descrição"].append("Desconto em Espécie")
         dados_descontos["Valor (€)"].append(f"{resultado['desconto_especie']:.2f}")
     
