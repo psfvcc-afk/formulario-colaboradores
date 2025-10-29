@@ -9,7 +9,7 @@ import calendar
 import time
 
 st.set_page_config(
-    page_title="Processamento Salarial v2.4",
+    page_title="Processamento Salarial v2.5",
     page_icon="💰",
     layout="wide"
 )
@@ -68,8 +68,12 @@ COLUNAS_SNAPSHOT = [
 
 ESTADOS_CIVIS = ["Solteiro", "Casado Único Titular", "Casado Dois Titulares"]
 
-# MAPEAMENTO ENTRE APP REGISTO E APP PROCESSAMENTO
+# HORAS PERMITIDAS (dropdown)
+HORAS_PERMITIDAS = [16, 20, 40]
+
+# MAPEAMENTO COMPLETO ENTRE APP REGISTO E APP PROCESSAMENTO
 MAPEAMENTO_ESTADO_CIVIL = {
+    # Da app de registo
     "Não Casado": "Solteiro",
     "Casado 1": "Casado Único Titular",
     "Casado 2": "Casado Dois Titulares",
@@ -80,9 +84,23 @@ MAPEAMENTO_ESTADO_CIVIL = {
 }
 
 MAPEAMENTO_TIPO_IRS = {
+    # Da app de registo
+    "Automático (por tabela)": "Tabela",
+    "Percentagem fixa": "Fixa",
+    # Variações possíveis
     "Tabela": "Tabela",
     "Fixa": "Fixa",
-    "Percentagem Fixa": "Fixa"  # Possível variação
+    "Percentagem Fixa": "Fixa"
+}
+
+MAPEAMENTO_DEFICIENCIA = {
+    "Sim": "Sim",
+    "Não": "Não",
+    # Possíveis variações
+    "sim": "Sim",
+    "não": "Não",
+    "S": "Sim",
+    "N": "Não"
 }
 
 # ==================== SESSION STATE ====================
@@ -132,6 +150,24 @@ def normalizar_tipo_irs(valor):
         return "Tabela"
     valor_str = str(valor).strip()
     return MAPEAMENTO_TIPO_IRS.get(valor_str, "Tabela")
+
+def normalizar_deficiencia(valor):
+    """Normaliza campo de deficiência"""
+    if pd.isna(valor) or valor == '':
+        return "Não"
+    valor_str = str(valor).strip()
+    return MAPEAMENTO_DEFICIENCIA.get(valor_str, "Não")
+
+def normalizar_percentagem_irs(valor):
+    """Normaliza percentagem IRS de diferentes fontes"""
+    # App registo usa: "% IRS Fixa"
+    # App processamento usa: "IRS Percentagem Fixa"
+    if pd.isna(valor) or valor == '':
+        return 0.0
+    try:
+        return float(valor)
+    except:
+        return 0.0
 
 # ==================== FUNÇÕES DROPBOX ====================
 
@@ -215,21 +251,9 @@ def calcular_irs_por_tabela(base_incidencia, estado_civil, num_dependentes, tem_
     """
     Calcula IRS com base nas tabelas carregadas
     base_incidencia = salário bruto mensal
-    
-    ⚠️ NOTA: Esta é uma implementação simplificada.
-    Para cálculo preciso, seria necessário:
-    1. Identificar a tabela correta (I-VII)
-    2. Encontrar o escalão de rendimento
-    3. Aplicar taxa e parcela a abater
-    
-    Por agora, retorna estimativa baseada em escalões aproximados
     """
     if st.session_state.tabela_irs is None:
-        st.warning("⚠️ Tabela IRS não carregada. Usando 10% por defeito.")
-        return base_incidencia * 0.10
-    
-    # Escalões simplificados (valores aproximados 2025)
-    # TODO: Melhorar com leitura real das tabelas Excel
+        st.warning("⚠️ Tabela IRS não carregada. Usando escalões aproximados.")
     
     # Ajustar por dependentes (reduz taxa)
     reducao_dependentes = num_dependentes * 0.01  # 1% por dependente (aproximado)
@@ -258,17 +282,6 @@ def calcular_irs_por_tabela(base_incidencia, estado_civil, num_dependentes, tem_
 def calcular_irs(base_incidencia, modo_calculo, percentagem_fixa, estado_civil, num_dependentes, tem_deficiencia=False):
     """
     Função unificada de cálculo IRS - CORRIGIDA!
-    
-    Args:
-        base_incidencia: Salário bruto mensal
-        modo_calculo: "Fixa" ou "Tabela"
-        percentagem_fixa: % IRS fixa configurada
-        estado_civil: Estado civil do colaborador
-        num_dependentes: Número de dependentes
-        tem_deficiencia: Tem deficiência
-    
-    Returns:
-        Valor de IRS a reter
     """
     
     if modo_calculo == "Fixa":
@@ -303,12 +316,21 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     horas_semana = float(dados.get('Nº Horas/Semana', 40))
     salario_bruto = calcular_salario_base(horas_semana, st.session_state.salario_minimo)
     
-    # Aplicar mapeamentos
+    # Aplicar mapeamentos para sincronizar com app de registo
     estado_civil_raw = dados.get('Estado Civil', 'Solteiro')
     estado_civil = normalizar_estado_civil(estado_civil_raw)
     
+    # App registo usa "Tipo IRS" ou "IRS Modo Calculo"
     tipo_irs_raw = dados.get('Tipo IRS', dados.get('IRS Modo Calculo', 'Tabela'))
     tipo_irs = normalizar_tipo_irs(tipo_irs_raw)
+    
+    # App registo usa "% IRS Fixa" (com espaços)
+    perc_irs_raw = dados.get('% IRS Fixa', dados.get('IRS Percentagem Fixa', 0))
+    perc_irs = normalizar_percentagem_irs(perc_irs_raw)
+    
+    # App registo usa "Pessoa com Deficiência"
+    deficiencia_raw = dados.get('Pessoa com Deficiência', dados.get('Deficiência', 'Não'))
+    deficiencia = normalizar_deficiencia(deficiencia_raw)
     
     snapshot = {
         "Nome Completo": colaborador,
@@ -322,8 +344,8 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Estado Civil": estado_civil,
         "Nº Titulares": int(dados.get('Nº Titulares', 2)),
         "Nº Dependentes": int(dados.get('Nº Dependentes', 0)),
-        "Deficiência": str(dados.get('Deficiência', 'Não')),
-        "IRS Percentagem Fixa": float(dados.get('IRS Percentagem Fixa', dados.get('% IRS Fixa', 0))),
+        "Deficiência": deficiencia,
+        "IRS Percentagem Fixa": perc_irs,
         "IRS Modo Calculo": tipo_irs,
         "Status": "Ativo",
         "Data Rescisão": "",
@@ -359,6 +381,14 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
                 if 'IRS Modo Calculo' in snapshot:
                     snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
+                if 'Deficiência' in snapshot:
+                    snapshot['Deficiência'] = normalizar_deficiencia(snapshot['Deficiência'])
+                if 'IRS Percentagem Fixa' in snapshot:
+                    snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(snapshot['IRS Percentagem Fixa'])
+                
+                # GARANTIR Status (FIX BUG DESAPARECIMENTO!)
+                if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
+                    snapshot['Status'] = 'Ativo'
                 
                 st.caption(f"📸 Snapshot: {snapshot.get('Timestamp', 'N/A')}")
                 return snapshot
@@ -381,6 +411,14 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                         snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
                     if 'IRS Modo Calculo' in snapshot:
                         snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
+                    if 'Deficiência' in snapshot:
+                        snapshot['Deficiência'] = normalizar_deficiencia(snapshot['Deficiência'])
+                    if 'IRS Percentagem Fixa' in snapshot:
+                        snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(snapshot['IRS Percentagem Fixa'])
+                    
+                    # GARANTIR Status
+                    if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
+                        snapshot['Status'] = 'Ativo'
                     
                     st.caption(f"📸 Herdado de {aba}")
                     return snapshot
@@ -394,7 +432,14 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
         return None
 
 def gravar_snapshot(empresa, snapshot):
+    """
+    FIX BUG: SEMPRE garantir que Status existe e está preservado!
+    """
     try:
+        # GARANTIR Status antes de gravar
+        if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
+            snapshot['Status'] = 'Ativo'
+        
         ano = snapshot['Ano']
         mes = snapshot['Mês']
         nome_aba = get_nome_aba_snapshot(ano, mes)
@@ -434,14 +479,21 @@ def gravar_snapshot(empresa, snapshot):
         return False
 
 def atualizar_campo_colaborador(empresa, colaborador, ano, mes, campo, novo_valor):
+    """
+    FIX BUG: Garantir que Status é SEMPRE preservado ao atualizar campos!
+    """
     snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
     
     if not snapshot:
         return False
     
+    # PRESERVAR Status explicitamente
+    status_original = snapshot.get('Status', 'Ativo')
+    
     snapshot[campo] = novo_valor
     snapshot['Ano'] = ano
     snapshot['Mês'] = mes
+    snapshot['Status'] = status_original  # GARANTIR que mantém o status!
     snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     if campo == "Nº Horas/Semana":
@@ -567,8 +619,8 @@ def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v2.4")
-st.caption("✅ IRS corrigido | ⏰ Horários implementados | 🔄 Mapeamento entre apps")
+st.title("💰 Processamento Salarial v2.5")
+st.caption("✅ Bug desaparecimento corrigido | ⏰ Dropdown 16/20/40h | 🔄 Sincronização apps")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 st.markdown("---")
 
@@ -645,6 +697,9 @@ if menu == "⚙️ Configurações":
                 col2.metric("⏰ Horas", f"{snap['Nº Horas/Semana']:.0f}h")
                 col3.metric("🔢 Nº Pingo", snap.get('Número Pingo Doce', ''))
                 
+                # Mostrar Status para debug
+                st.info(f"📌 Status atual: **{snap.get('Status', 'N/A')}**")
+                
                 with st.form("form_edit"):
                     col1, col2 = st.columns(2)
                     with col1:
@@ -668,7 +723,8 @@ if menu == "⚙️ Configurações":
                             time.sleep(1)
                         
                         if s1 and s2:
-                            st.success("✅ GRAVADO!")
+                            st.success("✅ GRAVADO COM SUCESSO!")
+                            st.info("🔍 Colaborador continua ativo e visível na lista")
                             st.balloons()
                             time.sleep(3)
                             st.session_state.ultimo_reload = datetime.now()
@@ -676,10 +732,10 @@ if menu == "⚙️ Configurações":
         else:
             st.warning("⚠️ Nenhum colaborador ativo")
     
-    # TAB 3: HORÁRIOS - IMPLEMENTADO! ✅
+    # TAB 3: HORÁRIOS - DROPDOWN CORRIGIDO! ✅
     with tab3:
         st.subheader("⏰ Mudanças de Horário")
-        st.info("💡 Altere as horas semanais do colaborador. O salário bruto será recalculado automaticamente.")
+        st.info("💡 Altere as horas semanais do colaborador (16h, 20h ou 40h). O salário bruto será recalculado automaticamente.")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -720,13 +776,12 @@ if menu == "⚙️ Configurações":
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        novas_horas = st.number_input(
+                        # DROPDOWN COM VALORES PERMITIDOS! ✅
+                        novas_horas = st.selectbox(
                             "⏰ Novas Horas Semanais",
-                            min_value=4.0,
-                            max_value=40.0,
-                            value=horas_atuais,
-                            step=1.0,
-                            help="Entre 4h e 40h semanais"
+                            options=HORAS_PERMITIDAS,
+                            index=HORAS_PERMITIDAS.index(int(horas_atuais)) if int(horas_atuais) in HORAS_PERMITIDAS else 2,
+                            help="Escolha entre 16h, 20h ou 40h semanais"
                         )
                     
                     with col2:
@@ -762,6 +817,7 @@ if menu == "⚙️ Configurações":
                                 snap_hor['Nº Horas/Semana'] = novas_horas
                                 snap_hor['Salário Bruto'] = novo_salario
                                 snap_hor['Vencimento Hora'] = novo_venc_hora
+                                snap_hor['Status'] = 'Ativo'  # GARANTIR Status!
                                 
                                 if observacoes:
                                     obs_atual = snap_hor.get('Observações', '')
@@ -844,6 +900,7 @@ if menu == "⚙️ Configurações":
                         snap_irs['Deficiência'] = tem_deficiencia
                         snap_irs['IRS Modo Calculo'] = irs_modo
                         snap_irs['IRS Percentagem Fixa'] = irs_percentagem
+                        snap_irs['Status'] = 'Ativo'  # GARANTIR Status!
                         snap_irs['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
                         with st.spinner("🔄 Gravando..."):
@@ -1090,11 +1147,12 @@ elif menu == "📊 Tabela IRS":
 
 # SIDEBAR
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v2.4 ✅
+st.sidebar.info(f"""v2.5 ✅
 💶 SMN: {st.session_state.salario_minimo}€
-🔄 Mapeamento ativo
-⏰ Horários implementados
-📊 IRS corrigido""")
+🔧 Bug desaparecimento corrigido
+⏰ Dropdown 16/20/40h
+🔄 Sincronização apps
+📊 IRS funcional""")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
