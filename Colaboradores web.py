@@ -10,7 +10,7 @@ import calendar
 import time
 
 st.set_page_config(
-    page_title="Processamento Salarial v2.7",
+    page_title="Processamento Salarial v2.8",
     page_icon="💰",
     layout="wide"
 )
@@ -31,11 +31,13 @@ dbx = dropbox.Dropbox(
 EMPRESAS = {
     "Magnetic Sky Lda": {
         "path": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Processamento Salários Magnetic/Gestão Colaboradores Magnetic.xlsx",
-        "tem_horas_extras": False
+        "tem_horas_extras": False,
+        "pasta_baixas": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Baixas Médicas"
     },
     "CCM Retail Lda": {
         "path": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx",
-        "tem_horas_extras": True
+        "tem_horas_extras": True,
+        "pasta_baixas": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Baixas Médicas"
     }
 }
 
@@ -54,6 +56,14 @@ MOTIVOS_RESCISAO = [
     "Denúncia pelo trabalhador - aviso prévio completo",
     "Denúncia pelo trabalhador - sem aviso prévio",
     "Denúncia pela entidade patronal - excesso faltas",
+    "Despedimento por facto imputável ao trabalhador",
+    "Despedimento colectivo",
+    "Despedimento por extinção do posto de trabalho",
+    "Despedimento por inadaptação",
+    "Revogação por acordo",
+    "Reforma por velhice",
+    "Reforma por invalidez",
+    "Falecimento",
     "Outro (especificar em observações)"
 ]
 
@@ -64,6 +74,11 @@ COLUNAS_SNAPSHOT = [
     "IRS Percentagem Fixa", "IRS Modo Calculo",
     "Status", "Data Rescisão", "Motivo Rescisão", 
     "NIF", "NISS", "Data de Admissão", "IBAN", "Secção", "Timestamp"
+]
+
+COLUNAS_FALTAS_BAIXAS = [
+    "Nome Completo", "Ano", "Mês", "Tipo", "Data Início", "Data Fim", 
+    "Dias Úteis", "Dias Totais", "Observações", "Ficheiro Anexo", "Timestamp"
 ]
 
 ESTADOS_CIVIS = ["Solteiro", "Casado Único Titular", "Casado Dois Titulares"]
@@ -107,6 +122,8 @@ if 'ultimo_reload' not in st.session_state:
     st.session_state.ultimo_reload = datetime.now()
 if 'tabela_irs' not in st.session_state:
     st.session_state.tabela_irs = None
+if 'dados_processamento' not in st.session_state:
+    st.session_state.dados_processamento = {}
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
@@ -159,6 +176,52 @@ def normalizar_percentagem_irs(valor):
 
 def get_nome_aba_snapshot(ano, mes):
     return f"Estado_{ano}_{mes:02d}"
+
+def get_nome_aba_faltas_baixas(ano, mes):
+    return f"Faltas_Baixas_{ano}_{mes:02d}"
+
+def criar_pasta_dropbox(path):
+    """Cria pasta na Dropbox se não existir"""
+    try:
+        dbx.files_get_metadata(path)
+        return True
+    except:
+        try:
+            dbx.files_create_folder_v2(path)
+            return True
+        except Exception as e:
+            st.error(f"Erro ao criar pasta: {e}")
+            return False
+
+def upload_ficheiro_baixa(empresa, ano, mes, colaborador, file):
+    """Upload de ficheiro de baixa médica para Dropbox"""
+    try:
+        pasta_base = EMPRESAS[empresa]["pasta_baixas"]
+        pasta_ano = f"{pasta_base}/{ano}"
+        pasta_mes = f"{pasta_ano}/{mes:02d}_{calendar.month_name[mes]}"
+        
+        # Criar estrutura de pastas
+        criar_pasta_dropbox(pasta_base)
+        criar_pasta_dropbox(pasta_ano)
+        criar_pasta_dropbox(pasta_mes)
+        
+        # Nome do ficheiro
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome_limpo = colaborador.replace(" ", "_")
+        extensao = file.name.split(".")[-1]
+        nome_ficheiro = f"{nome_limpo}_{timestamp}.{extensao}"
+        
+        caminho_completo = f"{pasta_mes}/{nome_ficheiro}"
+        
+        # Upload
+        file.seek(0)
+        dbx.files_upload(file.read(), caminho_completo, mode=dropbox.files.WriteMode.overwrite)
+        
+        return caminho_completo
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao fazer upload: {e}")
+        return None
 
 def download_excel(empresa):
     try:
@@ -230,6 +293,22 @@ def calcular_vencimento_ajustado(salario_bruto, dias_faltas, dias_baixas):
     dias_pagos = 30 - dias_faltas - dias_baixas
     dias_pagos = max(dias_pagos, 0)
     return (salario_bruto / 30) * dias_pagos
+
+def calcular_dias_entre_datas(data_inicio, data_fim, feriados_list):
+    """Calcula dias úteis e totais entre duas datas"""
+    if data_inicio > data_fim:
+        return 0, 0
+    
+    dias_totais = (data_fim - data_inicio).days + 1
+    dias_uteis = 0
+    
+    data_atual = data_inicio
+    while data_atual <= data_fim:
+        if data_atual.weekday() < 5 and data_atual not in feriados_list:
+            dias_uteis += 1
+        data_atual += timedelta(days=1)
+    
+    return dias_uteis, dias_totais
 
 def calcular_dias_uteis(ano, mes, feriados_list):
     num_dias = calendar.monthrange(ano, mes)[1]
@@ -472,6 +551,7 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     return snapshot
 
 def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
+    """Carrega último snapshot com dados ATUALIZADOS das configurações"""
     excel_file = download_excel(empresa)
     if not excel_file:
         return None
@@ -480,6 +560,7 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
         wb = load_workbook(excel_file, data_only=False)
         nome_aba = get_nome_aba_snapshot(ano, mes)
         
+        # Primeiro tenta aba do mês atual
         if nome_aba in wb.sheetnames:
             df = pd.read_excel(excel_file, sheet_name=nome_aba)
             df_colab = df[df['Nome Completo'] == colaborador]
@@ -487,54 +568,41 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
             if not df_colab.empty:
                 snapshot = df_colab.iloc[-1].to_dict()
                 
-                if 'Estado Civil' in snapshot:
-                    snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
-                if 'IRS Modo Calculo' in snapshot:
-                    snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
-                if 'Deficiência' in snapshot:
-                    snapshot['Deficiência'] = normalizar_deficiencia(snapshot['Deficiência'])
-                if 'IRS Percentagem Fixa' in snapshot:
-                    snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(snapshot['IRS Percentagem Fixa'])
+                # ATUALIZAR com dados da aba Colaboradores
+                df_base = carregar_dados_base(empresa)
+                dados_colab = df_base[df_base['Nome Completo'] == colaborador]
+                
+                if not dados_colab.empty:
+                    dados = dados_colab.iloc[0]
+                    
+                    # Atualizar campos que podem ter mudado
+                    snapshot['Nº Horas/Semana'] = float(dados.get('Nº Horas/Semana', snapshot.get('Nº Horas/Semana', 40)))
+                    snapshot['Subsídio Alimentação Diário'] = float(dados.get('Subsídio Alimentação Diário', snapshot.get('Subsídio Alimentação Diário', 5.96)))
+                    snapshot['Número Pingo Doce'] = str(dados.get('Número Pingo Doce', snapshot.get('Número Pingo Doce', '')))
+                    
+                    # Recalcular salário com base nas horas atualizadas
+                    horas = float(snapshot['Nº Horas/Semana'])
+                    snapshot['Salário Bruto'] = calcular_salario_base(horas, st.session_state.salario_minimo)
+                    snapshot['Vencimento Hora'] = calcular_vencimento_hora(snapshot['Salário Bruto'], horas)
+                    
+                    # Atualizar dados IRS
+                    snapshot['Estado Civil'] = normalizar_estado_civil(dados.get('Estado Civil', snapshot.get('Estado Civil', 'Solteiro')))
+                    snapshot['Nº Titulares'] = int(dados.get('Nº Titulares', snapshot.get('Nº Titulares', 2)))
+                    snapshot['Nº Dependentes'] = int(dados.get('Nº Dependentes', snapshot.get('Nº Dependentes', 0)))
+                    snapshot['Deficiência'] = normalizar_deficiencia(dados.get('Pessoa com Deficiência', snapshot.get('Deficiência', 'Não')))
+                    snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(dados.get('Tipo IRS', snapshot.get('IRS Modo Calculo', 'Tabela')))
+                    snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(dados.get('% IRS Fixa', snapshot.get('IRS Percentagem Fixa', 0)))
                 
                 if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
                     snapshot['Status'] = 'Ativo'
                 
-                st.caption(f"📸 Snapshot {ano}-{mes:02d}: {snapshot.get('Timestamp', 'N/A')}")
+                st.caption(f"📸 Snapshot {ano}-{mes:02d}: {snapshot.get('Timestamp', 'N/A')} (dados atualizados)")
                 return snapshot
         
-        abas_estado = sorted([s for s in wb.sheetnames if s.startswith('Estado_')], reverse=True)
-        
-        for aba in abas_estado:
-            try:
-                df = pd.read_excel(excel_file, sheet_name=aba)
-                df_colab = df[df['Nome Completo'] == colaborador]
-                
-                if not df_colab.empty:
-                    snapshot = df_colab.iloc[-1].to_dict()
-                    snapshot['Ano'] = ano
-                    snapshot['Mês'] = mes
-                    snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    if 'Estado Civil' in snapshot:
-                        snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
-                    if 'IRS Modo Calculo' in snapshot:
-                        snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
-                    if 'Deficiência' in snapshot:
-                        snapshot['Deficiência'] = normalizar_deficiencia(snapshot['Deficiência'])
-                    if 'IRS Percentagem Fixa' in snapshot:
-                        snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(snapshot['IRS Percentagem Fixa'])
-                    
-                    if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
-                        snapshot['Status'] = 'Ativo'
-                    
-                    st.caption(f"📸 Herdado de {aba}")
-                    return snapshot
-            except:
-                continue
-        
+        # Se não existe snapshot do mês, cria novo com dados da aba Colaboradores
         snapshot = criar_snapshot_inicial(empresa, colaborador, ano, mes)
         if snapshot:
-            st.caption(f"📸 Criado da aba Colaboradores")
+            st.caption(f"📸 Criado da aba Colaboradores (dados atuais)")
         return snapshot
         
     except Exception as e:
@@ -616,6 +684,80 @@ def gravar_snapshot(empresa, snapshot):
         st.error(f"❌ Erro ao gravar: {e}")
         st.error(f"Detalhes: {str(e)}")
         return False
+
+def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_fim, obs, ficheiro_path=None):
+    """Grava registo de falta ou baixa"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return False
+        
+        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        
+        # Verificar integridade
+        if "Colaboradores" not in wb.sheetnames:
+            st.error("🚨 ERRO: Aba Colaboradores não encontrada!")
+            return False
+        
+        nome_aba = get_nome_aba_faltas_baixas(ano, mes)
+        garantir_aba(wb, nome_aba, COLUNAS_FALTAS_BAIXAS)
+        
+        ws = wb[nome_aba]
+        
+        # Calcular dias
+        feriados = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
+        dias_uteis, dias_totais = calcular_dias_entre_datas(data_inicio, data_fim, feriados)
+        
+        # Nova linha
+        nova_linha = [
+            colaborador,
+            ano,
+            mes,
+            tipo,
+            data_inicio.strftime("%Y-%m-%d"),
+            data_fim.strftime("%Y-%m-%d"),
+            dias_uteis,
+            dias_totais,
+            obs,
+            ficheiro_path if ficheiro_path else "",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]
+        
+        ws.append(nova_linha)
+        
+        # Upload com segurança
+        if upload_excel_seguro(empresa, wb):
+            st.success(f"✅ {tipo} registada: {dias_uteis} dias úteis / {dias_totais} dias totais")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao gravar: {e}")
+        return False
+
+def carregar_faltas_baixas(empresa, ano, mes, colaborador=None):
+    """Carrega faltas e baixas do mês"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return pd.DataFrame()
+        
+        nome_aba = get_nome_aba_faltas_baixas(ano, mes)
+        
+        try:
+            df = pd.read_excel(excel_file, sheet_name=nome_aba)
+            
+            if colaborador:
+                df = df[df['Nome Completo'] == colaborador]
+            
+            return df
+        except:
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"❌ Erro: {e}")
+        return pd.DataFrame()
 
 def atualizar_campo_colaborador(empresa, colaborador, ano, mes, campo, novo_valor):
     snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
@@ -715,30 +857,41 @@ def processar_calculo_salario(dados_form):
         'liquido': liquido
     }
 
-def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs, dias_aviso):
-    snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
-    
-    if not snapshot:
+def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs):
+    """Regista rescisão e atualiza status"""
+    try:
+        # Atualizar snapshot
+        snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
+        
+        if not snapshot:
+            return False
+        
+        snapshot['Status'] = 'Rescindido'
+        snapshot['Data Rescisão'] = data_rescisao.strftime("%Y-%m-%d")
+        snapshot['Motivo Rescisão'] = f"{motivo} | Obs: {obs}"
+        snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if not gravar_snapshot(empresa, snapshot):
+            return False
+        
+        # Atualizar status na aba Colaboradores
+        if not atualizar_status_colaborador(empresa, colaborador, 'Rescindido'):
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Erro: {e}")
         return False
-    
-    snapshot['Status'] = 'Rescindido'
-    snapshot['Data Rescisão'] = data_rescisao.strftime("%Y-%m-%d")
-    snapshot['Motivo Rescisão'] = f"{motivo} | Dias aviso: {dias_aviso} | Obs: {obs}"
-    snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    return gravar_snapshot(empresa, snapshot)
 
 # ==================== INTERFACE ====================
 
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v2.7")
-st.caption("🛡️ PROTEÇÃO TOTAL: Aba Colaboradores NUNCA é corrompida")
+st.title("💰 Processamento Salarial v2.8")
+st.caption("✨ NOVO: Gestão de faltas/baixas com datas + Upload de documentos + Rescisões completo")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
-
-# Aviso crítico
-st.warning("⚠️ **ATENÇÃO:** Se aparecer mensagem de erro sobre aba Colaboradores, NÃO ignore! Os dados estão protegidos.")
 
 st.markdown("---")
 
@@ -825,20 +978,33 @@ if menu == "⚙️ Configurações":
                     submit = st.form_submit_button("💾 GUARDAR", use_container_width=True, type="primary")
                     
                     if submit:
-                        with st.spinner("Gravando com proteção..."):
-                            s1 = atualizar_campo_colaborador(emp, colab_sel, ano_cfg, mes_cfg,
-                                                            "Subsídio Alimentação Diário", novo_sub)
-                            s2 = atualizar_campo_colaborador(emp, colab_sel, ano_cfg, mes_cfg,
-                                                            "Número Pingo Doce", novo_num)
+                        # Atualizar na aba Colaboradores
+                        df_base = carregar_dados_base(emp)
+                        excel_file = download_excel(emp)
+                        wb = load_workbook(excel_file, data_only=False)
                         
-                        if s1 and s2:
-                            st.success("✅ GRAVADO COM SEGURANÇA!")
-                            st.balloons()
+                        mask = df_base['Nome Completo'] == colab_sel
+                        df_base.loc[mask, 'Subsídio Alimentação Diário'] = novo_sub
+                        df_base.loc[mask, 'Número Pingo Doce'] = novo_num
+                        
+                        # Reescrever aba Colaboradores
+                        if "Colaboradores" in wb.sheetnames:
+                            idx = wb.sheetnames.index("Colaboradores")
+                            del wb["Colaboradores"]
+                            ws = wb.create_sheet("Colaboradores", idx)
+                        else:
+                            ws = wb.create_sheet("Colaboradores", 0)
+                        
+                        for r in dataframe_to_rows(df_base, index=False, header=True):
+                            ws.append(r)
+                        
+                        if upload_excel_seguro(emp, wb):
+                            st.success("✅ Dados atualizados na aba Colaboradores!")
+                            st.info("💡 Mudanças serão refletidas no próximo processamento")
                             time.sleep(2)
                             st.rerun()
         else:
             st.warning("⚠️ Nenhum colaborador ativo")
-            st.info("💡 Execute a migração na tab 'Migrar Status'")
     
     with tab3:
         st.subheader("⏰ Mudanças de Horário")
@@ -901,24 +1067,36 @@ if menu == "⚙️ Configurações":
                         if novas_horas == horas_atuais:
                             st.warning("⚠️ As horas não foram alteradas!")
                         else:
-                            with st.spinner("Atualizando com proteção..."):
-                                snap_hor['Nº Horas/Semana'] = novas_horas
-                                snap_hor['Salário Bruto'] = novo_salario
-                                snap_hor['Vencimento Hora'] = novo_venc_hora
-                                snap_hor['Status'] = 'Ativo'
-                                snap_hor['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                
-                                if gravar_snapshot(emp_hor, snap_hor):
-                                    st.success("✅ ATUALIZADO COM SEGURANÇA!")
-                                    st.balloons()
-                                    time.sleep(2)
-                                    st.rerun()
+                            # Atualizar na aba Colaboradores
+                            df_base = carregar_dados_base(emp_hor)
+                            excel_file = download_excel(emp_hor)
+                            wb = load_workbook(excel_file, data_only=False)
+                            
+                            mask = df_base['Nome Completo'] == colab_hor
+                            df_base.loc[mask, 'Nº Horas/Semana'] = novas_horas
+                            
+                            # Reescrever aba Colaboradores
+                            if "Colaboradores" in wb.sheetnames:
+                                idx = wb.sheetnames.index("Colaboradores")
+                                del wb["Colaboradores"]
+                                ws = wb.create_sheet("Colaboradores", idx)
+                            else:
+                                ws = wb.create_sheet("Colaboradores", 0)
+                            
+                            for r in dataframe_to_rows(df_base, index=False, header=True):
+                                ws.append(r)
+                            
+                            if upload_excel_seguro(emp_hor, wb):
+                                st.success("✅ Horário atualizado na aba Colaboradores!")
+                                st.info("💡 Novo salário será calculado no próximo processamento")
+                                st.balloons()
+                                time.sleep(2)
+                                st.rerun()
         else:
             st.warning("⚠️ Nenhum colaborador ativo")
     
     with tab4:
         st.subheader("📋 Dados IRS")
-        st.warning("⚠️ Esta operação é protegida. Se houver erro, os dados NÃO serão gravados.")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -963,26 +1141,35 @@ if menu == "⚙️ Configurações":
                     submit_irs = st.form_submit_button("💾 GUARDAR", use_container_width=True, type="primary")
                     
                     if submit_irs:
-                        st.info("🔒 Gravando com proteção de dados...")
+                        # Atualizar na aba Colaboradores
+                        df_base = carregar_dados_base(emp_irs)
+                        excel_file = download_excel(emp_irs)
+                        wb = load_workbook(excel_file, data_only=False)
                         
-                        snap_irs['Estado Civil'] = estado_civil
-                        snap_irs['Nº Titulares'] = num_titulares
-                        snap_irs['Nº Dependentes'] = num_dependentes
-                        snap_irs['Deficiência'] = tem_deficiencia
-                        snap_irs['IRS Modo Calculo'] = irs_modo
-                        snap_irs['IRS Percentagem Fixa'] = irs_percentagem
-                        snap_irs['Status'] = 'Ativo'
-                        snap_irs['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        mask = df_base['Nome Completo'] == colab_irs
+                        df_base.loc[mask, 'Estado Civil'] = estado_civil
+                        df_base.loc[mask, 'Nº Titulares'] = num_titulares
+                        df_base.loc[mask, 'Nº Dependentes'] = num_dependentes
+                        df_base.loc[mask, 'Pessoa com Deficiência'] = tem_deficiencia
+                        df_base.loc[mask, 'Tipo IRS'] = irs_modo
+                        df_base.loc[mask, '% IRS Fixa'] = irs_percentagem
                         
-                        with st.spinner("Verificando integridade dos dados..."):
-                            if gravar_snapshot(emp_irs, snap_irs):
-                                st.success("✅ Dados IRS gravados COM SEGURANÇA!")
-                                st.info("🛡️ Aba Colaboradores foi preservada")
-                                st.balloons()
-                                time.sleep(2)
-                                st.rerun()
-                            else:
-                                st.error("❌ Gravação cancelada por segurança!")
+                        # Reescrever aba Colaboradores
+                        if "Colaboradores" in wb.sheetnames:
+                            idx = wb.sheetnames.index("Colaboradores")
+                            del wb["Colaboradores"]
+                            ws = wb.create_sheet("Colaboradores", idx)
+                        else:
+                            ws = wb.create_sheet("Colaboradores", 0)
+                        
+                        for r in dataframe_to_rows(df_base, index=False, header=True):
+                            ws.append(r)
+                        
+                        if upload_excel_seguro(emp_irs, wb):
+                            st.success("✅ Dados IRS atualizados na aba Colaboradores!")
+                            st.balloons()
+                            time.sleep(2)
+                            st.rerun()
         else:
             st.warning("⚠️ Nenhum colaborador ativo")
     
@@ -1053,7 +1240,7 @@ elif menu == "🔧 Gestão Status":
                 
                 st.markdown("---")
 
-# ==================== PROCESSAR SALÁRIOS (código igual à v2.6, mantido por brevidade) ====================
+# ==================== PROCESSAR SALÁRIOS ====================
 
 elif menu == "💼 Processar Salários":
     st.header("💼 Processamento Mensal")
@@ -1095,7 +1282,7 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    with st.expander("📋 DADOS BASE", expanded=True):
+    with st.expander("📋 DADOS BASE (atualizados das Configurações)", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("💶 Salário Bruto", f"{salario_bruto:.2f}€")
         col2.metric("⏰ Horas/Semana", f"{horas_semana:.0f}h")
@@ -1110,6 +1297,119 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
+    # FALTAS E BAIXAS COM DATAS
+    st.subheader("🏖️ Faltas e Baixas Médicas")
+    
+    tab_faltas, tab_baixas, tab_historico = st.tabs(["➕ Nova Falta", "🏥 Nova Baixa", "📜 Histórico"])
+    
+    with tab_faltas:
+        with st.form("form_nova_falta"):
+            st.markdown("### Registar Falta")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                data_inicio_falta = st.date_input("📅 Data Início", value=date.today(), key="falta_inicio")
+            with col2:
+                data_fim_falta = st.date_input("📅 Data Fim", value=date.today(), key="falta_fim")
+            
+            obs_falta = st.text_area("📝 Observações", key="obs_falta")
+            
+            submit_falta = st.form_submit_button("💾 REGISTAR FALTA", use_container_width=True, type="primary")
+            
+            if submit_falta:
+                if data_inicio_falta > data_fim_falta:
+                    st.error("❌ Data de início deve ser anterior à data de fim!")
+                else:
+                    with st.spinner("A registar..."):
+                        if gravar_falta_baixa(emp_proc, ano_proc, mes_proc, colab_proc, 
+                                            "Falta", data_inicio_falta, data_fim_falta, obs_falta):
+                            st.success("✅ Falta registada!")
+                            time.sleep(1)
+                            st.rerun()
+    
+    with tab_baixas:
+        with st.form("form_nova_baixa"):
+            st.markdown("### Registar Baixa Médica")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                data_inicio_baixa = st.date_input("📅 Data Início", value=date.today(), key="baixa_inicio")
+            with col2:
+                data_fim_baixa = st.date_input("📅 Data Fim", value=date.today(), key="baixa_fim")
+            
+            obs_baixa = st.text_area("📝 Observações", key="obs_baixa")
+            
+            ficheiro_baixa = st.file_uploader("📎 Anexar Documento (PDF, imagem, etc.)", 
+                                             type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+                                             key="file_baixa")
+            
+            submit_baixa = st.form_submit_button("💾 REGISTAR BAIXA", use_container_width=True, type="primary")
+            
+            if submit_baixa:
+                if data_inicio_baixa > data_fim_baixa:
+                    st.error("❌ Data de início deve ser anterior à data de fim!")
+                else:
+                    with st.spinner("A processar..."):
+                        ficheiro_path = None
+                        
+                        if ficheiro_baixa:
+                            st.info("📤 A fazer upload do documento...")
+                            ficheiro_path = upload_ficheiro_baixa(emp_proc, ano_proc, mes_proc, 
+                                                                 colab_proc, ficheiro_baixa)
+                            if ficheiro_path:
+                                st.success(f"✅ Documento guardado: {ficheiro_path}")
+                        
+                        if gravar_falta_baixa(emp_proc, ano_proc, mes_proc, colab_proc,
+                                            "Baixa", data_inicio_baixa, data_fim_baixa, 
+                                            obs_baixa, ficheiro_path):
+                            st.success("✅ Baixa registada!")
+                            if ficheiro_path:
+                                st.info(f"📁 Documento: {ficheiro_path}")
+                            time.sleep(2)
+                            st.rerun()
+    
+    with tab_historico:
+        st.markdown("### 📜 Histórico do Mês")
+        
+        df_historico = carregar_faltas_baixas(emp_proc, ano_proc, mes_proc, colab_proc)
+        
+        if not df_historico.empty:
+            st.dataframe(
+                df_historico[['Tipo', 'Data Início', 'Data Fim', 'Dias Úteis', 'Dias Totais', 'Observações']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Totais
+            total_faltas_uteis = df_historico[df_historico['Tipo'] == 'Falta']['Dias Úteis'].sum()
+            total_baixas_uteis = df_historico[df_historico['Tipo'] == 'Baixa']['Dias Úteis'].sum()
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🏖️ Total Faltas (dias úteis)", int(total_faltas_uteis))
+            col2.metric("🏥 Total Baixas (dias úteis)", int(total_baixas_uteis))
+            col3.metric("📊 Total Geral", int(total_faltas_uteis + total_baixas_uteis))
+        else:
+            st.info("ℹ️ Sem registos para este mês")
+    
+    st.markdown("---")
+    
+    # CALCULAR DIAS ÚTEIS TRABALHADOS
+    df_historico = carregar_faltas_baixas(emp_proc, ano_proc, mes_proc, colab_proc)
+    
+    if not df_historico.empty:
+        total_faltas_uteis = int(df_historico[df_historico['Tipo'] == 'Falta']['Dias Úteis'].sum())
+        total_baixas_uteis = int(df_historico[df_historico['Tipo'] == 'Baixa']['Dias Úteis'].sum())
+    else:
+        total_faltas_uteis = 0
+        total_baixas_uteis = 0
+    
+    dias_uteis_trab = max(dias_uteis_mes - total_faltas_uteis - total_baixas_uteis, 0)
+    
+    st.info(f"📊 Dias úteis trabalhados: {dias_uteis_trab} (de {dias_uteis_mes} dias úteis no mês)")
+    
+    st.markdown("---")
+    
+    # RESTO DO PROCESSAMENTO
     col1, col2, col3 = st.columns(3)
     with col1:
         desconto_especie = st.checkbox("☑️ Desconto em Espécie")
@@ -1117,17 +1417,6 @@ elif menu == "💼 Processar Salários":
         sub_ferias = st.selectbox("🏖️ Sub. Férias", ["Duodécimos", "Total"])
     with col3:
         sub_natal = st.selectbox("🎄 Sub. Natal", ["Duodécimos", "Total"])
-    
-    st.markdown("---")
-    
-    st.subheader("🏖️ Faltas e Baixas")
-    col1, col2 = st.columns(2)
-    with col1:
-        faltas = st.number_input("Total Dias Faltas", min_value=0, value=0, key="falt")
-    with col2:
-        baixas = st.number_input("Total Dias Baixas", min_value=0, value=0, key="baix")
-    
-    dias_uteis_trab = max(dias_uteis_mes - faltas - baixas, 0)
     
     st.markdown("---")
     
@@ -1152,8 +1441,8 @@ elif menu == "💼 Processar Salários":
         'salario_bruto': salario_bruto,
         'horas_semana': horas_semana,
         'subsidio_alimentacao': subsidio_alim,
-        'dias_faltas': faltas,
-        'dias_baixas': baixas,
+        'dias_faltas': total_faltas_uteis,
+        'dias_baixas': total_baixas_uteis,
         'dias_uteis_trabalhados': dias_uteis_trab,
         'horas_noturnas': h_not,
         'horas_domingos': h_dom,
@@ -1172,7 +1461,7 @@ elif menu == "💼 Processar Salários":
     
     resultado = processar_calculo_salario(dados_calc)
     
-    st.subheader("💵 Preview")
+    st.subheader("💵 Preview do Processamento")
     
     col1, col2, col3 = st.columns(3)
     
@@ -1204,14 +1493,109 @@ elif menu == "💼 Processar Salários":
     
     with col3:
         st.markdown("### 💵 Resumo")
+        st.metric("Dias Úteis Mês", dias_uteis_mes)
+        st.metric("Faltas (dias úteis)", total_faltas_uteis)
+        st.metric("Baixas (dias úteis)", total_baixas_uteis)
         st.metric("Dias Úteis Trab.", dias_uteis_trab)
-        st.metric("Dias Pagos", 30 - faltas - baixas)
+        st.metric("Dias Pagos", 30 - total_faltas_uteis - total_baixas_uteis)
         st.markdown("---")
         st.metric("**💰 LÍQUIDO**", f"**{resultado['liquido']:.2f}€**")
 
+# ==================== RESCISÕES ====================
+
 elif menu == "🚪 Rescisões":
-    st.header("🚪 Rescisões")
-    st.info("Use 'Gestão Status' para desativar colaboradores")
+    st.header("🚪 Gestão de Rescisões")
+    st.info("📋 Registar rescisão e preparar envio para contabilidade")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        emp_resc = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_resc")
+    with col2:
+        mes_resc = st.selectbox("Mês", list(range(1, 13)),
+                               format_func=lambda x: calendar.month_name[x],
+                               index=datetime.now().month - 1, key="mes_resc")
+    with col3:
+        ano_resc = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_resc")
+    
+    colabs_ativos = carregar_colaboradores_ativos(emp_resc)
+    
+    if not colabs_ativos:
+        st.warning("⚠️ Nenhum colaborador ativo")
+        st.stop()
+    
+    st.markdown("---")
+    
+    with st.form("form_rescisao"):
+        st.markdown("### 📝 Dados da Rescisão")
+        
+        colab_resc = st.selectbox("👤 Colaborador", colabs_ativos, key="col_resc")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            data_rescisao = st.date_input("📅 Data de Rescisão", value=date.today())
+            motivo_rescisao = st.selectbox("📋 Motivo da Rescisão", MOTIVOS_RESCISAO)
+        
+        with col2:
+            enviar_contabilidade = st.checkbox("📤 Preparar para envio à contabilidade", value=True)
+            observacoes = st.text_area("📝 Observações / Detalhes adicionais", height=100)
+        
+        st.markdown("---")
+        
+        submit_rescisao = st.form_submit_button("🚪 REGISTAR RESCISÃO", use_container_width=True, type="primary")
+        
+        if submit_rescisao:
+            st.warning("⚠️ Esta ação é IRREVERSÍVEL!")
+            
+            if st.button("✅ CONFIRMAR RESCISÃO", type="primary"):
+                with st.spinner("A processar rescisão..."):
+                    if registar_rescisao(emp_resc, colab_resc, ano_resc, mes_resc, 
+                                       data_rescisao, motivo_rescisao, observacoes):
+                        st.success(f"✅ Rescisão de '{colab_resc}' registada!")
+                        st.info(f"📅 Data: {data_rescisao.strftime('%d/%m/%Y')}")
+                        st.info(f"📋 Motivo: {motivo_rescisao}")
+                        
+                        if enviar_contabilidade:
+                            st.success("📤 Rescisão marcada para envio à contabilidade")
+                            st.info("💡 Exporte os dados do colaborador para enviar ao contabilista")
+                        
+                        st.balloons()
+                        time.sleep(3)
+                        st.rerun()
+    
+    st.markdown("---")
+    st.subheader("📊 Rescisões Registadas")
+    
+    # Mostrar colaboradores rescindidos
+    df_base = carregar_dados_base(emp_resc)
+    df_rescindidos = df_base[df_base['Status'] == 'Rescindido']
+    
+    if not df_rescindidos.empty:
+        for _, row in df_rescindidos.iterrows():
+            nome = row['Nome Completo']
+            
+            # Buscar dados de rescisão no snapshot
+            snap = carregar_ultimo_snapshot(emp_resc, nome, ano_resc, mes_resc)
+            
+            if snap and snap.get('Status') == 'Rescindido':
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"### 👤 {nome}")
+                    st.write(f"📅 **Data Rescisão:** {snap.get('Data Rescisão', 'N/A')}")
+                    st.write(f"📋 **Motivo:** {snap.get('Motivo Rescisão', 'N/A')}")
+                    st.write(f"🏢 **Secção:** {row.get('Secção', 'N/A')}")
+                
+                with col2:
+                    st.error("🚪 Rescindido")
+                    if st.button("📄 Exportar Dados", key=f"exp_{nome}"):
+                        st.info("💡 Funcionalidade de exportação em desenvolvimento")
+                
+                st.markdown("---")
+    else:
+        st.info("ℹ️ Sem rescisões registadas")
+
+# ==================== TABELA IRS ====================
 
 elif menu == "📊 Tabela IRS":
     st.header("📊 Gestão de Tabela IRS")
@@ -1233,11 +1617,12 @@ elif menu == "📊 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v2.7 🛡️ PROTEÇÃO TOTAL
+st.sidebar.info(f"""v2.8 ✨ MELHORIAS
 💶 SMN: {st.session_state.salario_minimo}€
-🛡️ Verificação de integridade
-🔒 Aba Colaboradores protegida
-✅ Upload cancelado se erro""")
+✅ Faltas/baixas com datas
+📤 Upload de documentos
+🚪 Rescisões completo
+🔄 Configurações sincronizadas""")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
