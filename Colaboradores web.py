@@ -1463,43 +1463,92 @@ elif menu == "💼 Processar Salários":
     
     st.subheader("💵 Preview do Processamento")
     
+    # Criar dados para as tabelas
+    dados_remuneracoes = {
+        "Descrição": [
+            "Vencimento Ajustado",
+            "Sub. Alimentação",
+            "Trabalho Noturno (+25%)",
+            "Domingos",
+            "Feriados (×2)",
+            "Sub. Férias",
+            "Sub. Natal",
+            "Horas Extra"
+        ],
+        "Valor (€)": [
+            f"{resultado['vencimento_ajustado']:.2f}",
+            f"{resultado['sub_alimentacao']:.2f}",
+            f"{resultado['trabalho_noturno']:.2f}",
+            f"{resultado['domingos']:.2f}",
+            f"{resultado['feriados']:.2f}",
+            f"{resultado['sub_ferias']:.2f}",
+            f"{resultado['sub_natal']:.2f}",
+            f"{resultado['banco_horas_valor']:.2f}"
+        ]
+    }
+    
+    # Adicionar outros proveitos se existir
+    if outros_prov > 0:
+        dados_remuneracoes["Descrição"].append("Outros Proveitos")
+        dados_remuneracoes["Valor (€)"].append(f"{resultado['outros_proveitos']:.2f}")
+    
+    dados_descontos = {
+        "Descrição": [
+            "Base Seg. Social",
+            "Segurança Social (11%)",
+            "Base IRS",
+            "IRS"
+        ],
+        "Valor (€)": [
+            f"{resultado['base_ss']:.2f}",
+            f"{resultado['seg_social']:.2f}",
+            f"{resultado['base_irs']:.2f}",
+            f"{resultado['irs']:.2f}"
+        ]
+    }
+    
+    # Adicionar desconto espécie se existir
+    if desconto_especie:
+        dados_descontos["Descrição"].append("Desconto em Espécie")
+        dados_descontos["Valor (€)"].append(f"{resultado['desconto_especie']:.2f}")
+    
+    dados_resumo = {
+        "Descrição": [
+            "Dias Úteis do Mês",
+            "Faltas (dias úteis)",
+            "Baixas (dias úteis)",
+            "Dias Úteis Trabalhados",
+            "Dias Pagos (sobre 30)"
+        ],
+        "Valor": [
+            str(dias_uteis_mes),
+            str(total_faltas_uteis),
+            str(total_baixas_uteis),
+            str(dias_uteis_trab),
+            str(30 - total_faltas_uteis - total_baixas_uteis)
+        ]
+    }
+    
+    # Criar três colunas para as tabelas
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.markdown("### 💰 Remunerações")
-        st.metric("Vencimento Ajustado", f"{resultado['vencimento_ajustado']:.2f}€")
-        st.metric("Sub. Alimentação", f"{resultado['sub_alimentacao']:.2f}€")
-        st.metric("Trabalho Noturno", f"{resultado['trabalho_noturno']:.2f}€")
-        st.metric("Domingos", f"{resultado['domingos']:.2f}€")
-        st.metric("Feriados", f"{resultado['feriados']:.2f}€")
-        st.metric("Sub. Férias", f"{resultado['sub_ferias']:.2f}€")
-        st.metric("Sub. Natal", f"{resultado['sub_natal']:.2f}€")
-        st.metric("Horas Extra", f"{resultado['banco_horas_valor']:.2f}€")
-        if outros_prov > 0:
-            st.metric("Outros", f"{resultado['outros_proveitos']:.2f}€")
-        st.markdown("---")
-        st.metric("**TOTAL**", f"**{resultado['total_remuneracoes']:.2f}€**")
+        df_rem = pd.DataFrame(dados_remuneracoes)
+        st.dataframe(df_rem, hide_index=True, use_container_width=True)
+        st.markdown(f"**TOTAL REMUNERAÇÕES: {resultado['total_remuneracoes']:.2f}€**")
     
     with col2:
         st.markdown("### 📉 Descontos")
-        st.metric("Base SS", f"{resultado['base_ss']:.2f}€")
-        st.metric("Seg. Social (11%)", f"{resultado['seg_social']:.2f}€")
-        st.metric("Base IRS", f"{resultado['base_irs']:.2f}€")
-        st.metric("IRS", f"{resultado['irs']:.2f}€")
-        if desconto_especie:
-            st.metric("Desconto Espécie", f"{resultado['desconto_especie']:.2f}€")
-        st.markdown("---")
-        st.metric("**TOTAL**", f"**{resultado['total_descontos']:.2f}€**")
+        df_desc = pd.DataFrame(dados_descontos)
+        st.dataframe(df_desc, hide_index=True, use_container_width=True)
+        st.markdown(f"**TOTAL DESCONTOS: {resultado['total_descontos']:.2f}€**")
     
     with col3:
         st.markdown("### 💵 Resumo")
-        st.metric("Dias Úteis Mês", dias_uteis_mes)
-        st.metric("Faltas (dias úteis)", total_faltas_uteis)
-        st.metric("Baixas (dias úteis)", total_baixas_uteis)
-        st.metric("Dias Úteis Trab.", dias_uteis_trab)
-        st.metric("Dias Pagos", 30 - total_faltas_uteis - total_baixas_uteis)
-        st.markdown("---")
-        st.metric("**💰 LÍQUIDO**", f"**{resultado['liquido']:.2f}€**")
+        df_resumo = pd.DataFrame(dados_resumo)
+        st.dataframe(df_resumo, hide_index=True, use_container_width=True)
+        st.markdown(f"### **💰 LÍQUIDO: {resultado['liquido']:.2f}€**")
 
 # ==================== RESCISÕES ====================
 
