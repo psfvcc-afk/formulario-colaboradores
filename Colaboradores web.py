@@ -125,6 +125,14 @@ if 'tabela_irs' not in st.session_state:
     st.session_state.tabela_irs = None
 if 'dados_processamento' not in st.session_state:
     st.session_state.dados_processamento = {}
+if 'empresa_selecionada' not in st.session_state:
+    st.session_state.empresa_selecionada = None
+if 'mes_selecionado' not in st.session_state:
+    st.session_state.mes_selecionado = datetime.now().month
+if 'ano_selecionado' not in st.session_state:
+    st.session_state.ano_selecionado = 2025
+if 'colaborador_selecionado' not in st.session_state:
+    st.session_state.colaborador_selecionado = None
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
@@ -834,8 +842,31 @@ def processar_calculo_salario(dados_form):
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
     
+    # ✅ LÓGICA CORRETA - Base IRS SEMPRE inclui subsídios (duodécimos OU total)
+    # 
+    # Exemplos práticos:
+    # 
+    # DUODÉCIMOS (mês normal):
+    #   Salário: 870€ | Sub. Férias: 72.50€ | Sub. Natal: 72.50€
+    #   Base IRS = 870 + 72.50 + 72.50 = 1.015€
+    # 
+    # TOTAL - Junho (férias pagas):
+    #   Salário: 870€ | Sub. Férias: 870€ | Sub. Natal: 72.50€
+    #   Base IRS = 870 + 870 + 72.50 = 1.812,50€
+    # 
+    # TOTAL - Dezembro (natal pago):
+    #   Salário: 870€ | Sub. Férias: 72.50€ | Sub. Natal: 870€
+    #   Base IRS = 870 + 72.50 + 870 = 1.812,50€
+    # 
+    # TOTAL - Ambos no mesmo mês:
+    #   Salário: 870€ | Sub. Férias: 870€ | Sub. Natal: 870€
+    #   Base IRS = 870 + 870 + 870 = 2.610€
+    # 
+    # Em TODOS os cenários, os subsídios pagos são incluídos na base IRS!
+    base_irs = salario_bruto + sub_ferias + sub_natal
+    
     irs = calcular_irs(
-        base_incidencia=salario_bruto,
+        base_incidencia=base_irs,
         modo_calculo=dados_form.get('irs_modo', 'Tabela'),
         percentagem_fixa=dados_form.get('irs_percentagem_fixa', 0),
         estado_civil=dados_form.get('estado_civil', 'Solteiro'),
@@ -872,7 +903,7 @@ def processar_calculo_salario(dados_form):
         'total_remuneracoes': total_remuneracoes,
         'base_ss': base_ss,
         'seg_social': seg_social,
-        'base_irs': salario_bruto,
+        'base_irs': base_irs,
         'irs': irs,
         'desconto_especie': desconto_especie,
         'cartao_refeicao': cartao_refeicao,
@@ -965,20 +996,32 @@ if menu == "⚙️ Configurações":
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            emp = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_cfg")
+            emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+            emp = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_cfg")
+            st.session_state.empresa_selecionada = emp
         with col2:
             mes_cfg = st.selectbox("Mês", list(range(1, 13)), 
                                  format_func=lambda x: calendar.month_name[x],
-                                 index=datetime.now().month - 1, key="mes_cfg")
+                                 index=st.session_state.mes_selecionado - 1, key="mes_cfg")
+            st.session_state.mes_selecionado = mes_cfg
         with col3:
-            ano_cfg = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_cfg")
+            ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+            ano_cfg = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, key="ano_cfg")
+            st.session_state.ano_selecionado = ano_cfg
         
         colabs = carregar_colaboradores_ativos(emp)
         
         if colabs:
             st.success(f"✅ {len(colabs)} colaboradores ativos")
             
-            colab_sel = st.selectbox("Colaborador", colabs, key="col_cfg")
+            # Manter colaborador selecionado
+            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs:
+                colab_idx = colabs.index(st.session_state.colaborador_selecionado)
+            else:
+                colab_idx = 0
+            
+            colab_sel = st.selectbox("Colaborador", colabs, index=colab_idx, key="col_cfg")
+            st.session_state.colaborador_selecionado = colab_sel
             
             snap = carregar_ultimo_snapshot(emp, colab_sel, ano_cfg, mes_cfg)
             
@@ -1045,18 +1088,29 @@ if menu == "⚙️ Configurações":
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            emp_hor = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_hor")
+            emp_idx_hor = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+            emp_hor = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_hor, key="emp_hor")
+            st.session_state.empresa_selecionada = emp_hor
         with col2:
             mes_hor = st.selectbox("Mês", list(range(1, 13)),
                                   format_func=lambda x: calendar.month_name[x],
-                                  index=datetime.now().month - 1, key="mes_hor")
+                                  index=st.session_state.mes_selecionado - 1, key="mes_hor")
+            st.session_state.mes_selecionado = mes_hor
         with col3:
-            ano_hor = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_hor")
+            ano_idx_hor = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+            ano_hor = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_hor, key="ano_hor")
+            st.session_state.ano_selecionado = ano_hor
         
         colabs_hor = carregar_colaboradores_ativos(emp_hor)
         
         if colabs_hor:
-            colab_hor = st.selectbox("Colaborador", colabs_hor, key="col_hor")
+            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_hor:
+                colab_idx_hor = colabs_hor.index(st.session_state.colaborador_selecionado)
+            else:
+                colab_idx_hor = 0
+            
+            colab_hor = st.selectbox("Colaborador", colabs_hor, index=colab_idx_hor, key="col_hor")
+            st.session_state.colaborador_selecionado = colab_hor
             
             snap_hor = carregar_ultimo_snapshot(emp_hor, colab_hor, ano_hor, mes_hor)
             
@@ -1134,18 +1188,29 @@ if menu == "⚙️ Configurações":
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            emp_irs = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_irs")
+            emp_idx_irs = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+            emp_irs = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_irs, key="emp_irs")
+            st.session_state.empresa_selecionada = emp_irs
         with col2:
             mes_irs = st.selectbox("Mês", list(range(1, 13)),
                                   format_func=lambda x: calendar.month_name[x],
-                                  index=datetime.now().month - 1, key="mes_irs")
+                                  index=st.session_state.mes_selecionado - 1, key="mes_irs")
+            st.session_state.mes_selecionado = mes_irs
         with col3:
-            ano_irs = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_irs")
+            ano_idx_irs = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+            ano_irs = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_irs, key="ano_irs")
+            st.session_state.ano_selecionado = ano_irs
         
         colabs_irs = carregar_colaboradores_ativos(emp_irs)
         
         if colabs_irs:
-            colab_irs = st.selectbox("Colaborador", colabs_irs, key="col_irs")
+            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_irs:
+                colab_idx_irs = colabs_irs.index(st.session_state.colaborador_selecionado)
+            else:
+                colab_idx_irs = 0
+            
+            colab_irs = st.selectbox("Colaborador", colabs_irs, index=colab_idx_irs, key="col_irs")
+            st.session_state.colaborador_selecionado = colab_irs
             
             snap_irs = carregar_ultimo_snapshot(emp_irs, colab_irs, ano_irs, mes_irs)
             
@@ -1226,7 +1291,9 @@ elif menu == "🔧 Gestão Status":
     
     col1, col2 = st.columns(2)
     with col1:
-        emp_status = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_status")
+        emp_idx_status = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp_status = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_status, key="emp_status")
+        st.session_state.empresa_selecionada = emp_status
     with col2:
         mostrar = st.radio("Mostrar", ["Ativos", "Inativos", "Todos"], horizontal=True)
     
@@ -1281,13 +1348,18 @@ elif menu == "💼 Processar Salários":
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        emp_proc = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_proc")
+        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp_proc = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_proc")
+        st.session_state.empresa_selecionada = emp_proc
     with col2:
         mes_proc = st.selectbox("Mês", list(range(1, 13)),
                                format_func=lambda x: calendar.month_name[x],
-                               index=datetime.now().month - 1, key="mes_proc")
+                               index=st.session_state.mes_selecionado - 1, key="mes_proc")
+        st.session_state.mes_selecionado = mes_proc
     with col3:
-        ano_proc = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_proc")
+        ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+        ano_proc = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, key="ano_proc")
+        st.session_state.ano_selecionado = ano_proc
     
     colabs_proc = carregar_colaboradores_ativos(emp_proc)
     
@@ -1298,7 +1370,14 @@ elif menu == "💼 Processar Salários":
     
     st.success(f"✅ {len(colabs_proc)} colaboradores ativos")
     
-    colab_proc = st.selectbox("Colaborador", colabs_proc, key="col_proc")
+    # Manter colaborador selecionado
+    if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_proc:
+        colab_idx = colabs_proc.index(st.session_state.colaborador_selecionado)
+    else:
+        colab_idx = 0
+    
+    colab_proc = st.selectbox("Colaborador", colabs_proc, index=colab_idx, key="col_proc")
+    st.session_state.colaborador_selecionado = colab_proc
     
     snap_proc = carregar_ultimo_snapshot(emp_proc, colab_proc, ano_proc, mes_proc)
     
@@ -1608,13 +1687,18 @@ elif menu == "🚪 Rescisões":
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        emp_resc = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_resc")
+        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp_resc = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_resc")
+        st.session_state.empresa_selecionada = emp_resc
     with col2:
         mes_resc = st.selectbox("Mês", list(range(1, 13)),
                                format_func=lambda x: calendar.month_name[x],
-                               index=datetime.now().month - 1, key="mes_resc")
+                               index=st.session_state.mes_selecionado - 1, key="mes_resc")
+        st.session_state.mes_selecionado = mes_resc
     with col3:
-        ano_resc = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_resc")
+        ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+        ano_resc = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, key="ano_resc")
+        st.session_state.ano_selecionado = ano_resc
     
     colabs_ativos = carregar_colaboradores_ativos(emp_resc)
     
@@ -1721,7 +1805,8 @@ st.sidebar.info(f"""v2.8 ✨ MELHORIAS
 ✅ Faltas/baixas com datas
 📤 Upload de documentos
 🚪 Rescisões completo
-🔄 Configurações sincronizadas""")
+🔄 Configurações sincronizadas
+✅ Base IRS: Duodécimos + Total""")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
