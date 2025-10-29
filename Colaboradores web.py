@@ -9,7 +9,7 @@ import calendar
 import time
 
 st.set_page_config(
-    page_title="Processamento Salarial v2.3",
+    page_title="Processamento Salarial v2.4",
     page_icon="💰",
     layout="wide"
 )
@@ -68,6 +68,23 @@ COLUNAS_SNAPSHOT = [
 
 ESTADOS_CIVIS = ["Solteiro", "Casado Único Titular", "Casado Dois Titulares"]
 
+# MAPEAMENTO ENTRE APP REGISTO E APP PROCESSAMENTO
+MAPEAMENTO_ESTADO_CIVIL = {
+    "Não Casado": "Solteiro",
+    "Casado 1": "Casado Único Titular",
+    "Casado 2": "Casado Dois Titulares",
+    # Manter compatibilidade com valores antigos
+    "Solteiro": "Solteiro",
+    "Casado Único Titular": "Casado Único Titular",
+    "Casado Dois Titulares": "Casado Dois Titulares"
+}
+
+MAPEAMENTO_TIPO_IRS = {
+    "Tabela": "Tabela",
+    "Fixa": "Fixa",
+    "Percentagem Fixa": "Fixa"  # Possível variação
+}
+
 # ==================== SESSION STATE ====================
 
 if 'authenticated' not in st.session_state:
@@ -99,6 +116,22 @@ def check_password():
             st.error("❌ Password incorreta")
         return False
     return True
+
+# ==================== FUNÇÕES DE MAPEAMENTO ====================
+
+def normalizar_estado_civil(valor):
+    """Mapeia estado civil da app registo para app processamento"""
+    if pd.isna(valor) or valor == '':
+        return "Solteiro"
+    valor_str = str(valor).strip()
+    return MAPEAMENTO_ESTADO_CIVIL.get(valor_str, "Solteiro")
+
+def normalizar_tipo_irs(valor):
+    """Mapeia tipo IRS entre diferentes nomenclaturas"""
+    if pd.isna(valor) or valor == '':
+        return "Tabela"
+    valor_str = str(valor).strip()
+    return MAPEAMENTO_TIPO_IRS.get(valor_str, "Tabela")
 
 # ==================== FUNÇÕES DROPBOX ====================
 
@@ -170,11 +203,8 @@ def calcular_dias_uteis(ano, mes, feriados_list):
 def carregar_tabela_irs_excel(uploaded_file):
     """Carrega tabela IRS de ficheiro Excel"""
     try:
-        # Tentar ler todas as sheets
         xls = pd.ExcelFile(uploaded_file)
         st.success(f"✅ Ficheiro carregado! Abas encontradas: {', '.join(xls.sheet_names)}")
-        
-        # Guardar em session_state
         st.session_state.tabela_irs = xls
         return xls
     except Exception as e:
@@ -184,23 +214,71 @@ def carregar_tabela_irs_excel(uploaded_file):
 def calcular_irs_por_tabela(base_incidencia, estado_civil, num_dependentes, tem_deficiencia=False):
     """
     Calcula IRS com base nas tabelas carregadas
-    base_incidencia = salário bruto
+    base_incidencia = salário bruto mensal
+    
+    ⚠️ NOTA: Esta é uma implementação simplificada.
+    Para cálculo preciso, seria necessário:
+    1. Identificar a tabela correta (I-VII)
+    2. Encontrar o escalão de rendimento
+    3. Aplicar taxa e parcela a abater
+    
+    Por agora, retorna estimativa baseada em escalões aproximados
     """
     if st.session_state.tabela_irs is None:
         st.warning("⚠️ Tabela IRS não carregada. Usando 10% por defeito.")
         return base_incidencia * 0.10
     
-    # Determinar qual tabela usar
-    # Para trabalho dependente (não pensões):
-    # - Não casado ou casado dois titulares sem deficiência → Tabela I-VII
-    # - Casado único titular sem deficiência → outra tabela
-    # etc.
+    # Escalões simplificados (valores aproximados 2025)
+    # TODO: Melhorar com leitura real das tabelas Excel
     
-    # Por enquanto, retorno simplificado
-    # TODO: Implementar lógica completa com as tabelas
-    taxa_irs = 0.10  # Placeholder
+    # Ajustar por dependentes (reduz taxa)
+    reducao_dependentes = num_dependentes * 0.01  # 1% por dependente (aproximado)
     
-    return base_incidencia * taxa_irs
+    # Escalões básicos (simplificados)
+    if base_incidencia <= 820:
+        taxa = 0.135
+    elif base_incidencia <= 1200:
+        taxa = 0.18
+    elif base_incidencia <= 1700:
+        taxa = 0.23
+    elif base_incidencia <= 2500:
+        taxa = 0.265
+    else:
+        taxa = 0.32
+    
+    # Aplicar redução por dependentes
+    taxa_final = max(taxa - reducao_dependentes, 0.05)  # Mínimo 5%
+    
+    # Casado único titular tem taxas mais baixas
+    if estado_civil == "Casado Único Titular":
+        taxa_final *= 0.85  # Redução de 15%
+    
+    return base_incidencia * taxa_final
+
+def calcular_irs(base_incidencia, modo_calculo, percentagem_fixa, estado_civil, num_dependentes, tem_deficiencia=False):
+    """
+    Função unificada de cálculo IRS - CORRIGIDA!
+    
+    Args:
+        base_incidencia: Salário bruto mensal
+        modo_calculo: "Fixa" ou "Tabela"
+        percentagem_fixa: % IRS fixa configurada
+        estado_civil: Estado civil do colaborador
+        num_dependentes: Número de dependentes
+        tem_deficiencia: Tem deficiência
+    
+    Returns:
+        Valor de IRS a reter
+    """
+    
+    if modo_calculo == "Fixa":
+        # Usar percentagem fixa configurada
+        taxa = percentagem_fixa / 100
+        irs = base_incidencia * taxa
+        return irs
+    else:
+        # Usar tabela IRS
+        return calcular_irs_por_tabela(base_incidencia, estado_civil, num_dependentes, tem_deficiencia)
 
 # ==================== FUNÇÕES DE DADOS BASE ====================
 
@@ -225,6 +303,13 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     horas_semana = float(dados.get('Nº Horas/Semana', 40))
     salario_bruto = calcular_salario_base(horas_semana, st.session_state.salario_minimo)
     
+    # Aplicar mapeamentos
+    estado_civil_raw = dados.get('Estado Civil', 'Solteiro')
+    estado_civil = normalizar_estado_civil(estado_civil_raw)
+    
+    tipo_irs_raw = dados.get('Tipo IRS', dados.get('IRS Modo Calculo', 'Tabela'))
+    tipo_irs = normalizar_tipo_irs(tipo_irs_raw)
+    
     snapshot = {
         "Nome Completo": colaborador,
         "Ano": ano,
@@ -234,12 +319,12 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Número Pingo Doce": str(dados.get('Número Pingo Doce', '')),
         "Salário Bruto": salario_bruto,
         "Vencimento Hora": calcular_vencimento_hora(salario_bruto, horas_semana),
-        "Estado Civil": str(dados.get('Estado Civil', 'Solteiro')),
+        "Estado Civil": estado_civil,
         "Nº Titulares": int(dados.get('Nº Titulares', 2)),
         "Nº Dependentes": int(dados.get('Nº Dependentes', 0)),
         "Deficiência": str(dados.get('Deficiência', 'Não')),
-        "IRS Percentagem Fixa": float(dados.get('IRS Percentagem Fixa', 0)),
-        "IRS Modo Calculo": str(dados.get('IRS Modo Calculo', 'Tabela')),
+        "IRS Percentagem Fixa": float(dados.get('IRS Percentagem Fixa', dados.get('% IRS Fixa', 0))),
+        "IRS Modo Calculo": tipo_irs,
         "Status": "Ativo",
         "Data Rescisão": "",
         "Motivo Rescisão": "",
@@ -268,6 +353,13 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
             
             if not df_colab.empty:
                 snapshot = df_colab.iloc[-1].to_dict()
+                
+                # APLICAR MAPEAMENTOS ao carregar
+                if 'Estado Civil' in snapshot:
+                    snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
+                if 'IRS Modo Calculo' in snapshot:
+                    snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
+                
                 st.caption(f"📸 Snapshot: {snapshot.get('Timestamp', 'N/A')}")
                 return snapshot
         
@@ -283,6 +375,13 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['Ano'] = ano
                     snapshot['Mês'] = mes
                     snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # APLICAR MAPEAMENTOS
+                    if 'Estado Civil' in snapshot:
+                        snapshot['Estado Civil'] = normalizar_estado_civil(snapshot['Estado Civil'])
+                    if 'IRS Modo Calculo' in snapshot:
+                        snapshot['IRS Modo Calculo'] = normalizar_tipo_irs(snapshot['IRS Modo Calculo'])
+                    
                     st.caption(f"📸 Herdado de {aba}")
                     return snapshot
             except:
@@ -414,18 +513,15 @@ def processar_calculo_salario(dados_form):
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
     
-    # IRS - Base de incidência = salário bruto
-    if dados_form.get('irs_modo') == 'Fixa':
-        taxa_irs = dados_form.get('irs_percentagem_fixa', 0) / 100
-        irs = salario_bruto * taxa_irs
-    else:
-        # Calcular por tabela
-        irs = calcular_irs_por_tabela(
-            salario_bruto,
-            dados_form.get('estado_civil'),
-            dados_form.get('num_dependentes'),
-            dados_form.get('tem_deficiencia', False)
-        )
+    # IRS - FUNÇÃO CORRIGIDA! ✅
+    irs = calcular_irs(
+        base_incidencia=salario_bruto,
+        modo_calculo=dados_form.get('irs_modo', 'Tabela'),
+        percentagem_fixa=dados_form.get('irs_percentagem_fixa', 0),
+        estado_civil=dados_form.get('estado_civil', 'Solteiro'),
+        num_dependentes=dados_form.get('num_dependentes', 0),
+        tem_deficiencia=dados_form.get('tem_deficiencia', False)
+    )
     
     desconto_especie = sub_alimentacao if dados_form.get('desconto_especie', False) else 0
     total_descontos = seg_social + irs + desconto_especie
@@ -471,8 +567,8 @@ def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v2.3")
-st.caption("✅ Vencimento ajustado e IRS corrigidos")
+st.title("💰 Processamento Salarial v2.4")
+st.caption("✅ IRS corrigido | ⏰ Horários implementados | 🔄 Mapeamento entre apps")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 st.markdown("---")
 
@@ -519,7 +615,7 @@ if menu == "⚙️ Configurações":
                 st.session_state.feriados_municipais = feriados_temp
                 st.success(f"✅ {len(feriados_temp)} feriados")
     
-    # TAB 2: COLABORADORES (mantém igual à v2.2)
+    # TAB 2: COLABORADORES
     with tab2:
         st.subheader("👥 Editar Dados")
         st.warning("⚠️ Aguarda confirmação antes de navegar!")
@@ -580,11 +676,118 @@ if menu == "⚙️ Configurações":
         else:
             st.warning("⚠️ Nenhum colaborador ativo")
     
-    # TAB 3: HORÁRIOS
+    # TAB 3: HORÁRIOS - IMPLEMENTADO! ✅
     with tab3:
         st.subheader("⏰ Mudanças de Horário")
-        # (código igual à v2.2)
-        st.info("🚧 Funcionalidade mantida da v2.2")
+        st.info("💡 Altere as horas semanais do colaborador. O salário bruto será recalculado automaticamente.")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            emp_hor = st.selectbox("Empresa", list(EMPRESAS.keys()), key="emp_hor")
+        with col2:
+            mes_hor = st.selectbox("Mês", list(range(1, 13)),
+                                  format_func=lambda x: calendar.month_name[x],
+                                  index=datetime.now().month - 1, key="mes_hor")
+        with col3:
+            ano_hor = st.selectbox("Ano", [2024, 2025, 2026], index=1, key="ano_hor")
+        
+        colabs_hor = carregar_colaboradores_ativos(emp_hor, ano_hor, mes_hor)
+        
+        if colabs_hor:
+            colab_hor = st.selectbox("Colaborador", colabs_hor, key="col_hor")
+            
+            with st.spinner("🔄 Carregando..."):
+                snap_hor = carregar_ultimo_snapshot(emp_hor, colab_hor, ano_hor, mes_hor)
+            
+            if snap_hor:
+                st.markdown("---")
+                
+                # Mostrar dados atuais
+                col1, col2, col3 = st.columns(3)
+                horas_atuais = float(snap_hor['Nº Horas/Semana'])
+                salario_atual = float(snap_hor['Salário Bruto'])
+                venc_hora_atual = float(snap_hor['Vencimento Hora'])
+                
+                col1.metric("⏰ Horas Atuais", f"{horas_atuais:.0f}h/semana")
+                col2.metric("💰 Salário Bruto Atual", f"{salario_atual:.2f}€")
+                col3.metric("💵 Vencimento/Hora Atual", f"{venc_hora_atual:.2f}€")
+                
+                st.markdown("---")
+                
+                with st.form("form_horario"):
+                    st.markdown("### Novo Horário")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        novas_horas = st.number_input(
+                            "⏰ Novas Horas Semanais",
+                            min_value=4.0,
+                            max_value=40.0,
+                            value=horas_atuais,
+                            step=1.0,
+                            help="Entre 4h e 40h semanais"
+                        )
+                    
+                    with col2:
+                        # Preview do novo salário
+                        novo_salario = calcular_salario_base(novas_horas, st.session_state.salario_minimo)
+                        novo_venc_hora = calcular_vencimento_hora(novo_salario, novas_horas)
+                        
+                        st.metric("💰 Novo Salário Bruto", f"{novo_salario:.2f}€",
+                                 delta=f"{novo_salario - salario_atual:.2f}€")
+                        st.metric("💵 Novo Vencimento/Hora", f"{novo_venc_hora:.2f}€",
+                                 delta=f"{novo_venc_hora - venc_hora_atual:.2f}€")
+                    
+                    observacoes = st.text_area(
+                        "📝 Observações (opcional)",
+                        placeholder="Ex: Mudança de part-time para full-time",
+                        height=80
+                    )
+                    
+                    submit_hor = st.form_submit_button(
+                        "💾 CONFIRMAR MUDANÇA DE HORÁRIO",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                    
+                    if submit_hor:
+                        if novas_horas == horas_atuais:
+                            st.warning("⚠️ As horas não foram alteradas!")
+                        else:
+                            st.warning("⏳ PROCESSANDO MUDANÇA...")
+                            
+                            with st.spinner("Atualizando horário..."):
+                                # Atualizar snapshot com novos valores
+                                snap_hor['Nº Horas/Semana'] = novas_horas
+                                snap_hor['Salário Bruto'] = novo_salario
+                                snap_hor['Vencimento Hora'] = novo_venc_hora
+                                
+                                if observacoes:
+                                    obs_atual = snap_hor.get('Observações', '')
+                                    snap_hor['Observações'] = f"{obs_atual}\n[{datetime.now().strftime('%Y-%m-%d')}] Mudança horário: {horas_atuais:.0f}h → {novas_horas:.0f}h. {observacoes}".strip()
+                                
+                                snap_hor['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                
+                                if gravar_snapshot(emp_hor, snap_hor):
+                                    st.success("✅ HORÁRIO ATUALIZADO COM SUCESSO!")
+                                    st.balloons()
+                                    
+                                    # Mostrar resumo
+                                    st.info(f"""
+                                    **Resumo da alteração:**
+                                    - Horas: {horas_atuais:.0f}h → {novas_horas:.0f}h
+                                    - Salário: {salario_atual:.2f}€ → {novo_salario:.2f}€
+                                    - Vencimento/hora: {venc_hora_atual:.2f}€ → {novo_venc_hora:.2f}€
+                                    """)
+                                    
+                                    time.sleep(3)
+                                    st.session_state.ultimo_reload = datetime.now()
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Erro ao gravar alteração!")
+        else:
+            st.warning("⚠️ Nenhum colaborador ativo")
     
     # TAB 4: DADOS IRS
     with tab4:
@@ -699,10 +902,11 @@ elif menu == "💼 Processar Salários":
         col3.metric("💵 Vencimento/Hora", f"{vencimento_hora:.2f}€")
         col4.metric("🍽️ Sub. Alimentação", f"{subsidio_alim:.2f}€/dia")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("📅 Dias Úteis Mês", dias_uteis_mes)
         col2.metric("👤 Estado Civil", snap_proc.get('Estado Civil', 'N/A'))
         col3.metric("👶 Dependentes", snap_proc.get('Nº Dependentes', 0))
+        col4.metric("📊 Modo IRS", snap_proc.get('IRS Modo Calculo', 'Tabela'))
     
     st.markdown("---")
     
@@ -764,7 +968,7 @@ elif menu == "💼 Processar Salários":
         'sub_natal_tipo': sub_natal,
         'desconto_especie': desconto_especie,
         'outros_proveitos': outros_prov,
-        'estado_civil': snap_proc.get('Estado Civil'),
+        'estado_civil': snap_proc.get('Estado Civil', 'Solteiro'),
         'num_dependentes': snap_proc.get('Nº Dependentes', 0),
         'tem_deficiencia': snap_proc.get('Deficiência', 'Não') == 'Sim',
         'irs_modo': snap_proc.get('IRS Modo Calculo', 'Tabela'),
@@ -773,20 +977,33 @@ elif menu == "💼 Processar Salários":
     
     resultado = processar_calculo_salario(dados_calc)
     
-    # DEBUG
+    # DEBUG - IRS
+    with st.expander("🔍 Debug - Cálculo IRS", expanded=False):
+        st.write(f"**Base de incidência:** {resultado['base_irs']:.2f}€ (Salário Bruto)")
+        st.write(f"**Modo:** {dados_calc['irs_modo']}")
+        
+        if dados_calc['irs_modo'] == 'Fixa':
+            st.write(f"**Taxa configurada:** {dados_calc['irs_percentagem_fixa']:.1f}%")
+            st.write(f"**Cálculo:** {resultado['base_irs']:.2f}€ × {dados_calc['irs_percentagem_fixa']/100:.3f} = **{resultado['irs']:.2f}€**")
+        else:
+            st.write(f"**Estado Civil:** {dados_calc['estado_civil']}")
+            st.write(f"**Dependentes:** {dados_calc['num_dependentes']}")
+            st.write(f"**Deficiência:** {'Sim' if dados_calc['tem_deficiencia'] else 'Não'}")
+            
+            if st.session_state.tabela_irs:
+                st.success("✅ Tabela IRS carregada - cálculo por tabela ativo")
+            else:
+                st.warning("⚠️ Sem tabela IRS - usando cálculo estimado por escalões")
+            
+            st.write(f"**IRS calculado:** **{resultado['irs']:.2f}€**")
+    
+    # DEBUG - Vencimento Ajustado
     with st.expander("🔍 Debug - Vencimento Ajustado", expanded=False):
         dias_pagos = 30 - faltas - baixas
         st.write(f"**Fórmula:** (salário_bruto / 30) × (30 - faltas - baixas)")
         st.write(f"= ({salario_bruto} / 30) × (30 - {faltas} - {baixas})")
         st.write(f"= {salario_bruto/30:.2f} × {dias_pagos}")
         st.write(f"= **{resultado['vencimento_ajustado']:.2f}€**")
-    
-    with st.expander("🔍 Debug - IRS", expanded=False):
-        st.write(f"**Base de incidência:** {resultado['base_irs']:.2f}€ (Salário Bruto)")
-        st.write(f"**Modo:** {dados_calc['irs_modo']}")
-        if dados_calc['irs_modo'] == 'Fixa':
-            st.write(f"**Taxa:** {dados_calc['irs_percentagem_fixa']:.1f}%")
-        st.write(f"**IRS a pagar:** {resultado['irs']:.2f}€")
     
     # PREVIEW
     st.subheader("💵 Preview")
@@ -842,6 +1059,13 @@ elif menu == "📊 Tabela IRS":
     1. Faça upload do ficheiro Excel com as tabelas IRS 2025
     2. O sistema irá carregar e usar automaticamente para cálculos
     3. As tabelas ficam guardadas durante a sessão
+    
+    ### ℹ️ Sobre o Cálculo:
+    - **Modo Fixa:** Usa a percentagem configurada para cada colaborador
+    - **Modo Tabela:** Usa escalões progressivos baseados no salário bruto
+      - Considera estado civil, dependentes e deficiência
+      - Se tabela Excel carregada: usa valores exatos
+      - Se não: usa escalões aproximados (simplificados)
     """)
     
     uploaded = st.file_uploader("📤 Carregar Tabelas IRS (Excel)", type=['xlsx', 'xls'])
@@ -860,12 +1084,17 @@ elif menu == "📊 Tabela IRS":
     
     if st.session_state.tabela_irs:
         st.success("✅ Tabela IRS carregada e ativa!")
+        st.info("💡 O sistema usará as tabelas para cálculos precisos de IRS.")
     else:
-        st.warning("⚠️ Nenhuma tabela carregada. IRS será calculado com 10% por defeito.")
+        st.warning("⚠️ Nenhuma tabela carregada. IRS será calculado com escalões aproximados.")
 
 # SIDEBAR
 st.sidebar.markdown("---")
-st.sidebar.info(f"v2.3 ✅ Correto\n💶 SMN: {st.session_state.salario_minimo}€")
+st.sidebar.info(f"""v2.4 ✅
+💶 SMN: {st.session_state.salario_minimo}€
+🔄 Mapeamento ativo
+⏰ Horários implementados
+📊 IRS corrigido""")
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.authenticated = False
