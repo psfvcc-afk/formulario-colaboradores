@@ -138,6 +138,10 @@ if 'ano_selecionado' not in st.session_state:
     st.session_state.ano_selecionado = 2025
 if 'colaborador_selecionado' not in st.session_state:
     st.session_state.colaborador_selecionado = None
+if 'confirmar_rescisao' not in st.session_state:
+    st.session_state.confirmar_rescisao = False
+if 'dados_rescisao' not in st.session_state:
+    st.session_state.dados_rescisao = None
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
@@ -1016,6 +1020,7 @@ def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs
         snapshot = carregar_ultimo_snapshot(empresa, colaborador, ano, mes)
         
         if not snapshot:
+            st.error("❌ Erro ao carregar snapshot do colaborador")
             return False
         
         snapshot['Status'] = 'Rescindido'
@@ -1024,16 +1029,18 @@ def registar_rescisao(empresa, colaborador, ano, mes, data_rescisao, motivo, obs
         snapshot['Timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         if not gravar_snapshot(empresa, snapshot):
+            st.error("❌ Erro ao gravar snapshot de rescisão")
             return False
         
         # Atualizar status na aba Colaboradores
         if not atualizar_status_colaborador(empresa, colaborador, 'Rescindido'):
+            st.error("❌ Erro ao atualizar status na aba Colaboradores")
             return False
         
         return True
         
     except Exception as e:
-        st.error(f"❌ Erro: {e}")
+        st.error(f"❌ Erro ao registar rescisão: {e}")
         return False
 
 # ==================== INTERFACE ====================
@@ -1899,23 +1906,69 @@ elif menu == "🚪 Rescisões":
         submit_rescisao = st.form_submit_button("🚪 REGISTAR RESCISÃO", use_container_width=True, type="primary")
         
         if submit_rescisao:
-            st.warning("⚠️ Esta ação é IRREVERSÍVEL!")
-            
-            if st.button("✅ CONFIRMAR RESCISÃO", type="primary"):
+            # Guardar dados em session state para confirmar
+            st.session_state.confirmar_rescisao = True
+            st.session_state.dados_rescisao = {
+                'empresa': emp_resc,
+                'colaborador': colab_resc,
+                'ano': ano_resc,
+                'mes': mes_resc,
+                'data': data_rescisao,
+                'motivo': motivo_rescisao,
+                'observacoes': observacoes,
+                'enviar_contabilidade': enviar_contabilidade
+            }
+            st.rerun()
+    
+    # Mostrar confirmação FORA do form
+    if st.session_state.confirmar_rescisao and st.session_state.dados_rescisao:
+        st.markdown("---")
+        st.warning("⚠️ **Esta ação é IRREVERSÍVEL!**")
+        
+        dados = st.session_state.dados_rescisao
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.info(f"""
+            **Confirmar Rescisão:**
+            - Colaborador: {dados['colaborador']}
+            - Data: {dados['data'].strftime('%d/%m/%Y')}
+            - Motivo: {dados['motivo']}
+            """)
+        
+        with col2:
+            if st.button("✅ CONFIRMAR RESCISÃO", type="primary", use_container_width=True):
                 with st.spinner("A processar rescisão..."):
-                    if registar_rescisao(emp_resc, colab_resc, ano_resc, mes_resc, 
-                                       data_rescisao, motivo_rescisao, observacoes):
-                        st.success(f"✅ Rescisão de '{colab_resc}' registada!")
-                        st.info(f"📅 Data: {data_rescisao.strftime('%d/%m/%Y')}")
-                        st.info(f"📋 Motivo: {motivo_rescisao}")
+                    if registar_rescisao(
+                        dados['empresa'], 
+                        dados['colaborador'], 
+                        dados['ano'], 
+                        dados['mes'],
+                        dados['data'], 
+                        dados['motivo'], 
+                        dados['observacoes']
+                    ):
+                        st.success(f"✅ Rescisão de '{dados['colaborador']}' registada!")
+                        st.info(f"📅 Data: {dados['data'].strftime('%d/%m/%Y')}")
+                        st.info(f"📋 Motivo: {dados['motivo']}")
                         
-                        if enviar_contabilidade:
+                        if dados['enviar_contabilidade']:
                             st.success("📤 Rescisão marcada para envio à contabilidade")
                             st.info("💡 Exporte os dados do colaborador para enviar ao contabilista")
+                        
+                        # Limpar session state
+                        st.session_state.confirmar_rescisao = False
+                        st.session_state.dados_rescisao = None
                         
                         st.balloons()
                         time.sleep(3)
                         st.rerun()
+            
+            if st.button("❌ CANCELAR", use_container_width=True):
+                st.session_state.confirmar_rescisao = False
+                st.session_state.dados_rescisao = None
+                st.rerun()
     
     st.markdown("---")
     st.subheader("📊 Rescisões Registadas")
