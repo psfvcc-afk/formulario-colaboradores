@@ -9,9 +9,10 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from copy import copy
 import calendar
 import time
+import json
 
 st.set_page_config(
-    page_title="Processamento Salarial v3.1",
+    page_title="Processamento Salarial v3.2",
     page_icon="💰",
     layout="wide"
 )
@@ -139,6 +140,8 @@ if 'ano_selecionado' not in st.session_state:
     st.session_state.ano_selecionado = 2025
 if 'colaborador_selecionado' not in st.session_state:
     st.session_state.colaborador_selecionado = None
+if 'templates_relatorios' not in st.session_state:
+    st.session_state.templates_relatorios = {}
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
@@ -569,7 +572,6 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(dados.get('% IRS Fixa', snapshot.get('IRS Percentagem Fixa', 0)))
                     snapshot['IBAN'] = str(dados.get('IBAN', snapshot.get('IBAN', '')))
                     
-                    # Dados de rescisão
                     snapshot['Data Rescisão'] = str(dados.get('Data Rescisão', snapshot.get('Data Rescisão', '')))
                     snapshot['Motivo Rescisão'] = str(dados.get('Motivo Rescisão', snapshot.get('Motivo Rescisão', '')))
                 
@@ -684,6 +686,41 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         st.error(f"❌ Erro ao gravar: {e}")
         return False
 
+def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
+    """Elimina um registo específico de falta/baixa"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return False
+        
+        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        nome_aba = get_nome_aba_faltas_baixas(ano, mes)
+        
+        if nome_aba not in wb.sheetnames:
+            st.error(f"❌ Aba '{nome_aba}' não encontrada!")
+            return False
+        
+        ws = wb[nome_aba]
+        
+        # Linha Excel = linha_idx + 2 (header + índice base 0)
+        linha_excel = linha_idx + 2
+        
+        if linha_excel > ws.max_row:
+            st.error("❌ Linha inválida!")
+            return False
+        
+        ws.delete_rows(linha_excel)
+        
+        if upload_excel_seguro(empresa, wb):
+            st.success("✅ Registo eliminado!")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao eliminar: {e}")
+        return False
+
 def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, h_feriados, h_extra, outros_prov, obs):
     """Grava registo de horas extras e outros proveitos"""
     try:
@@ -725,6 +762,40 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         
     except Exception as e:
         st.error(f"❌ Erro ao gravar: {e}")
+        return False
+
+def eliminar_registo_horas_extras(empresa, ano, mes, linha_idx):
+    """Elimina um registo específico de horas extras"""
+    try:
+        excel_file = download_excel(empresa)
+        if not excel_file:
+            return False
+        
+        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        nome_aba = get_nome_aba_horas_extras(ano, mes)
+        
+        if nome_aba not in wb.sheetnames:
+            st.error(f"❌ Aba '{nome_aba}' não encontrada!")
+            return False
+        
+        ws = wb[nome_aba]
+        
+        linha_excel = linha_idx + 2
+        
+        if linha_excel > ws.max_row:
+            st.error("❌ Linha inválida!")
+            return False
+        
+        ws.delete_rows(linha_excel)
+        
+        if upload_excel_seguro(empresa, wb):
+            st.success("✅ Registo eliminado!")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao eliminar: {e}")
         return False
 
 def carregar_faltas_baixas(empresa, ano, mes, colaborador=None):
@@ -837,7 +908,6 @@ def processar_calculo_salario(dados_form):
     domingos = horas_domingos * vencimento_hora
     feriados = horas_feriados * vencimento_hora * 2
     
-    # Subsídios configuráveis
     sub_ferias_tipo = dados_form.get('sub_ferias_tipo', 'Duodécimos')
     if sub_ferias_tipo == 'Total':
         sub_ferias = salario_bruto
@@ -875,7 +945,6 @@ def processar_calculo_salario(dados_form):
         tem_deficiencia=dados_form.get('tem_deficiencia', False)
     )
     
-    # Cartão Refeição
     desconto_especie = 0
     cartao_refeicao = dados_form.get('cartao_refeicao', False)
     
@@ -908,27 +977,24 @@ def processar_calculo_salario(dados_form):
         'liquido': liquido
     }
 
-def calcular_ftes_e_estatisticas(empresa):
+def calcular_ftes_e_estatisticas(empresa, ano=None, mes=None):
     """Calcula FTEs e estatísticas por secção"""
     df_base = carregar_dados_base(empresa)
     
     if df_base.empty:
         return None
     
-    # Filtrar apenas ativos
     df_ativos = df_base[df_base['Status'] == 'Ativo'].copy()
     
     if df_ativos.empty:
         return None
     
-    # Garantir que Secção existe
     if 'Secção' not in df_ativos.columns:
         df_ativos['Secção'] = 'Sem Secção'
     
     df_ativos['Secção'] = df_ativos['Secção'].fillna('Sem Secção')
     df_ativos['Secção'] = df_ativos['Secção'].replace('', 'Sem Secção')
     
-    # Agrupar por secção
     estatisticas = []
     
     for seccao in df_ativos['Secção'].unique():
@@ -938,7 +1004,6 @@ def calcular_ftes_e_estatisticas(empresa):
         horas_totais = df_seccao['Nº Horas/Semana'].sum()
         ftes = horas_totais / 40
         
-        # Detalhes por tipo de horário
         h16 = len(df_seccao[df_seccao['Nº Horas/Semana'] == 16])
         h20 = len(df_seccao[df_seccao['Nº Horas/Semana'] == 20])
         h40 = len(df_seccao[df_seccao['Nº Horas/Semana'] == 40])
@@ -956,7 +1021,6 @@ def calcular_ftes_e_estatisticas(empresa):
     df_stats = pd.DataFrame(estatisticas)
     df_stats = df_stats.sort_values('Secção')
     
-    # Totais gerais
     total_colaboradores = df_ativos.shape[0]
     total_horas = df_ativos['Nº Horas/Semana'].sum()
     total_ftes = total_horas / 40
@@ -965,37 +1029,104 @@ def calcular_ftes_e_estatisticas(empresa):
         'df_stats': df_stats,
         'total_colaboradores': total_colaboradores,
         'total_horas': total_horas,
-        'total_ftes': round(total_ftes, 2)
+        'total_ftes': round(total_ftes, 2),
+        'df_ativos': df_ativos
     }
 
-def gerar_relatorio_excel(empresa, campos_selecionados, filtros):
-    """Gera relatório Excel com campos selecionados"""
+def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
+    """Carrega dados completos incluindo faltas/baixas e horas extras"""
     try:
+        # Dados base
         df_base = carregar_dados_base(empresa)
         
         if df_base.empty:
             return None
         
-        # Aplicar filtros
+        # Aplicar filtros básicos
         df_filtrado = df_base.copy()
         
-        if filtros.get('status'):
-            if filtros['status'] != 'Todos':
-                df_filtrado = df_filtrado[df_filtrado['Status'] == filtros['status']]
+        if filtros.get('status') and filtros['status'] != 'Todos':
+            df_filtrado = df_filtrado[df_filtrado['Status'] == filtros['status']]
         
-        if filtros.get('seccao'):
-            if filtros['seccao'] != 'Todas':
-                df_filtrado = df_filtrado[df_filtrado['Secção'] == filtros['seccao']]
+        if filtros.get('seccao') and filtros['seccao'] != 'Todas':
+            df_filtrado = df_filtrado[df_filtrado['Secção'] == filtros['seccao']]
+        
+        # Carregar faltas e baixas
+        df_faltas_baixas = carregar_faltas_baixas(empresa, ano, mes)
+        
+        # Carregar horas extras
+        df_horas_extras = carregar_horas_extras(empresa, ano, mes)
+        
+        # Agregar dados por colaborador
+        resultado = []
+        
+        for _, row in df_filtrado.iterrows():
+            nome = row['Nome Completo']
+            dados_colab = row.to_dict()
+            
+            # Dados de faltas/baixas
+            if not df_faltas_baixas.empty:
+                df_colab_faltas = df_faltas_baixas[df_faltas_baixas['Nome Completo'] == nome]
+                
+                total_faltas = int(df_colab_faltas[df_colab_faltas['Tipo'] == 'Falta']['Dias Úteis'].sum())
+                total_baixas = int(df_colab_faltas[df_colab_faltas['Tipo'] == 'Baixa']['Dias Úteis'].sum())
+                
+                dados_colab['Total Faltas (dias)'] = total_faltas
+                dados_colab['Total Baixas (dias)'] = total_baixas
+                dados_colab['Total Faltas+Baixas'] = total_faltas + total_baixas
+            else:
+                dados_colab['Total Faltas (dias)'] = 0
+                dados_colab['Total Baixas (dias)'] = 0
+                dados_colab['Total Faltas+Baixas'] = 0
+            
+            # Dados de horas extras
+            if not df_horas_extras.empty:
+                df_colab_extras = df_horas_extras[df_horas_extras['Nome Completo'] == nome]
+                
+                dados_colab['Horas Noturnas'] = float(df_colab_extras['Horas Noturnas'].sum())
+                dados_colab['Horas Domingos'] = float(df_colab_extras['Horas Domingos'].sum())
+                dados_colab['Horas Feriados'] = float(df_colab_extras['Horas Feriados'].sum())
+                dados_colab['Horas Extra'] = float(df_colab_extras['Horas Extra'].sum())
+                dados_colab['Outros Proveitos'] = float(df_colab_extras['Outros Proveitos'].sum())
+                dados_colab['Total Horas Extras'] = (dados_colab['Horas Noturnas'] + 
+                                                     dados_colab['Horas Domingos'] + 
+                                                     dados_colab['Horas Feriados'] + 
+                                                     dados_colab['Horas Extra'])
+            else:
+                dados_colab['Horas Noturnas'] = 0.0
+                dados_colab['Horas Domingos'] = 0.0
+                dados_colab['Horas Feriados'] = 0.0
+                dados_colab['Horas Extra'] = 0.0
+                dados_colab['Outros Proveitos'] = 0.0
+                dados_colab['Total Horas Extras'] = 0.0
+            
+            resultado.append(dados_colab)
+        
+        df_completo = pd.DataFrame(resultado)
+        
+        return df_completo
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar dados: {e}")
+        return None
+
+def gerar_relatorio_excel(empresa, ano, mes, campos_selecionados, filtros):
+    """Gera relatório Excel com campos selecionados"""
+    try:
+        df_completo = carregar_dados_completos_relatorio(empresa, ano, mes, filtros)
+        
+        if df_completo is None or df_completo.empty:
+            return None
         
         # Selecionar apenas campos escolhidos
-        df_relatorio = df_filtrado[campos_selecionados].copy()
+        campos_disponiveis = [c for c in campos_selecionados if c in df_completo.columns]
+        df_relatorio = df_completo[campos_disponiveis].copy()
         
         # Criar Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_relatorio.to_excel(writer, sheet_name='Relatório', index=False)
             
-            # Formatação
             workbook = writer.book
             worksheet = writer.sheets['Relatório']
             
@@ -1025,13 +1156,32 @@ def gerar_relatorio_excel(empresa, campos_selecionados, filtros):
         st.error(f"❌ Erro ao gerar relatório: {e}")
         return None
 
+# ==================== GESTÃO DE TEMPLATES ====================
+
+def salvar_template(nome, campos):
+    """Salva um template de relatório"""
+    st.session_state.templates_relatorios[nome] = campos
+    st.success(f"✅ Template '{nome}' salvo!")
+
+def carregar_template(nome):
+    """Carrega um template de relatório"""
+    return st.session_state.templates_relatorios.get(nome, [])
+
+def eliminar_template(nome):
+    """Elimina um template de relatório"""
+    if nome in st.session_state.templates_relatorios:
+        del st.session_state.templates_relatorios[nome]
+        st.success(f"✅ Template '{nome}' eliminado!")
+        return True
+    return False
+
 # ==================== INTERFACE ====================
 
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v3.1")
-st.caption("✨ NOVO: Rescisões integradas + Gestão Status + Visão FTEs + Output de Relatórios")
+st.title("💰 Processamento Salarial v3.2")
+st.caption("✨ NOVO: Eliminar registos + Templates + Filtros Mês/Ano + Campos Processamento")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -1098,7 +1248,6 @@ if menu == "⚙️ Configurações":
             if snap:
                 st.markdown("---")
                 
-                # Verificar se tem rescisão
                 tem_rescisao = snap.get('Data Rescisão', '') != '' and snap.get('Data Rescisão', '') != 'nan'
                 
                 if tem_rescisao:
@@ -1121,7 +1270,6 @@ if menu == "⚙️ Configurações":
                 col3.info(f"🎄 Natal: {snap.get('Sub Natal Tipo', 'Duodécimos')}")
                 col4.info(f"🏦 IBAN: {snap.get('IBAN', 'N/A')[:10]}...")
                 
-                # Formulário de edição expandido
                 with st.expander("✏️ EDITAR DADOS", expanded=False):
                     with st.form("form_edit"):
                         st.markdown("### 💶 Dados Financeiros")
@@ -1179,7 +1327,6 @@ if menu == "⚙️ Configurações":
                         
                         with col2:
                             motivo_rescisao_atual = snap.get('Motivo Rescisão', '')
-                            # Extrair motivo da string (pode ter observações)
                             motivo_base = motivo_rescisao_atual.split('|')[0].strip() if motivo_rescisao_atual else ''
                             
                             if motivo_base and motivo_base in MOTIVOS_RESCISAO:
@@ -1198,7 +1345,6 @@ if menu == "⚙️ Configurações":
                         submit = st.form_submit_button("💾 GUARDAR TUDO", use_container_width=True, type="primary")
                         
                         if submit:
-                            # Atualizar na aba Colaboradores
                             df_base = carregar_dados_base(emp)
                             excel_file = download_excel(emp)
                             wb = load_workbook(excel_file, data_only=False)
@@ -1212,7 +1358,6 @@ if menu == "⚙️ Configurações":
                             df_base.loc[mask, 'Sub Férias Tipo'] = sub_ferias_tipo
                             df_base.loc[mask, 'Sub Natal Tipo'] = sub_natal_tipo
                             
-                            # Dados de rescisão
                             if data_rescisao:
                                 df_base.loc[mask, 'Data Rescisão'] = data_rescisao.strftime("%Y-%m-%d")
                                 obs_completa = motivo_rescisao
@@ -1220,7 +1365,6 @@ if menu == "⚙️ Configurações":
                                     obs_completa += f" | Obs: {obs_rescisao}"
                                 df_base.loc[mask, 'Motivo Rescisão'] = obs_completa
                             
-                            # Reescrever aba Colaboradores
                             if "Colaboradores" in wb.sheetnames:
                                 idx = wb.sheetnames.index("Colaboradores")
                                 del wb["Colaboradores"]
@@ -1458,7 +1602,6 @@ if menu == "⚙️ Configurações":
                         st.write(f"**{nome}**")
                         info_text = f"Secção: {row.get('Secção', 'N/A')} | Salário: {row.get('Salário Bruto', 0):.2f}€"
                         
-                        # Mostrar info de rescisão se existir
                         if row.get('Data Rescisão', '') and row.get('Data Rescisão', '') != 'nan':
                             info_text += f" | 🚪 Rescisão: {row.get('Data Rescisão', 'N/A')}"
                         
@@ -1634,11 +1777,30 @@ elif menu == "💼 Processar Salários":
         df_historico = carregar_faltas_baixas(emp_proc, ano_proc, mes_proc, colab_proc)
         
         if not df_historico.empty:
-            st.dataframe(
-                df_historico[['Tipo', 'Data Início', 'Data Fim', 'Dias Úteis', 'Dias Totais', 'Observações']],
-                use_container_width=True,
-                hide_index=True
-            )
+            for idx, row in df_historico.iterrows():
+                col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 1, 1, 1, 1, 2, 1])
+                
+                with col1:
+                    icone = "🏖️" if row['Tipo'] == 'Falta' else "🏥"
+                    st.write(f"{icone} **{row['Tipo']}**")
+                with col2:
+                    st.caption(f"📅 {row['Data Início']}")
+                with col3:
+                    st.caption(f"→ {row['Data Fim']}")
+                with col4:
+                    st.caption(f"📊 {row['Dias Úteis']} úteis")
+                with col5:
+                    st.caption(f"📅 {row['Dias Totais']} totais")
+                with col6:
+                    if row['Observações']:
+                        st.caption(f"📝 {row['Observações']}")
+                with col7:
+                    if st.button("🗑️", key=f"del_fb_{idx}", help="Eliminar registo"):
+                        if eliminar_registo_falta_baixa(emp_proc, ano_proc, mes_proc, idx):
+                            time.sleep(1)
+                            st.rerun()
+                
+                st.markdown("---")
             
             total_faltas_uteis = df_historico[df_historico['Tipo'] == 'Falta']['Dias Úteis'].sum()
             total_baixas_uteis = df_historico[df_historico['Tipo'] == 'Baixa']['Dias Úteis'].sum()
@@ -1709,11 +1871,31 @@ elif menu == "💼 Processar Salários":
         df_extras = carregar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc)
         
         if not df_extras.empty:
-            st.dataframe(
-                df_extras[['Horas Noturnas', 'Horas Domingos', 'Horas Feriados', 'Horas Extra', 'Outros Proveitos', 'Observações']],
-                use_container_width=True,
-                hide_index=True
-            )
+            for idx, row in df_extras.iterrows():
+                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([1, 1, 1, 1, 1, 1, 2, 1])
+                
+                with col1:
+                    st.caption(f"🌙 {row['Horas Noturnas']:.1f}h")
+                with col2:
+                    st.caption(f"📅 {row['Horas Domingos']:.1f}h")
+                with col3:
+                    st.caption(f"🎉 {row['Horas Feriados']:.1f}h")
+                with col4:
+                    st.caption(f"⚡ {row['Horas Extra']:.1f}h")
+                with col5:
+                    st.caption(f"💰 {row['Outros Proveitos']:.2f}€")
+                with col6:
+                    st.caption(f"📅 {row['Timestamp'][:10]}")
+                with col7:
+                    if row['Observações']:
+                        st.caption(f"📝 {row['Observações']}")
+                with col8:
+                    if st.button("🗑️", key=f"del_ext_{idx}", help="Eliminar registo"):
+                        if eliminar_registo_horas_extras(emp_proc, ano_proc, mes_proc, idx):
+                            time.sleep(1)
+                            st.rerun()
+                
+                st.markdown("---")
             
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("🌙 Noturnas", f"{df_extras['Horas Noturnas'].sum():.1f}h")
@@ -1864,13 +2046,24 @@ elif menu == "💼 Processar Salários":
 elif menu == "👥 Visão FTEs/Secção":
     st.header("👥 Visão de FTEs por Secção")
     
-    emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-    emp_ftes = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_ftes")
-    st.session_state.empresa_selecionada = emp_ftes
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp_ftes = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_ftes")
+        st.session_state.empresa_selecionada = emp_ftes
+    with col2:
+        mes_ftes = st.selectbox("Mês", list(range(1, 13)),
+                               format_func=lambda x: calendar.month_name[x],
+                               index=st.session_state.mes_selecionado - 1, key="mes_ftes")
+        st.session_state.mes_selecionado = mes_ftes
+    with col3:
+        ano_idx_ftes = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+        ano_ftes = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_ftes, key="ano_ftes")
+        st.session_state.ano_selecionado = ano_ftes
     
     st.markdown("---")
     
-    stats = calcular_ftes_e_estatisticas(emp_ftes)
+    stats = calcular_ftes_e_estatisticas(emp_ftes, ano_ftes, mes_ftes)
     
     if stats:
         # Métricas principais no topo
@@ -1906,19 +2099,29 @@ elif menu == "👥 Visão FTEs/Secção":
         
         st.markdown("---")
         
-        # Gráficos
+        # Gráficos com filtro de secção
         st.subheader("📊 Visualizações")
+        
+        # Filtro de secção
+        seccoes_disponiveis = ['Todas'] + sorted(df_display['Secção'].unique().tolist())
+        seccao_filtro = st.selectbox("🔍 Filtrar por Secção", seccoes_disponiveis, key="filtro_seccao_viz")
+        
+        # Aplicar filtro
+        if seccao_filtro != 'Todas':
+            df_viz = df_display[df_display['Secção'] == seccao_filtro].copy()
+        else:
+            df_viz = df_display.copy()
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("#### Colaboradores por Secção")
-            chart_data = df_display[['Secção', 'Nº Colaboradores']].set_index('Secção')
+            chart_data = df_viz[['Secção', 'Nº Colaboradores']].set_index('Secção')
             st.bar_chart(chart_data)
         
         with col2:
             st.markdown("#### FTEs por Secção")
-            chart_data = df_display[['Secção', 'FTEs']].set_index('Secção')
+            chart_data = df_viz[['Secção', 'FTEs']].set_index('Secção')
             st.bar_chart(chart_data)
         
     else:
@@ -1929,38 +2132,109 @@ elif menu == "👥 Visão FTEs/Secção":
 elif menu == "📊 Output":
     st.header("📊 Exportação de Relatórios")
     
-    emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-    emp_output = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_output")
-    st.session_state.empresa_selecionada = emp_output
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp_output = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_output")
+        st.session_state.empresa_selecionada = emp_output
+    with col2:
+        mes_output = st.selectbox("Mês", list(range(1, 13)),
+                                 format_func=lambda x: calendar.month_name[x],
+                                 index=st.session_state.mes_selecionado - 1, key="mes_output")
+        st.session_state.mes_selecionado = mes_output
+    with col3:
+        ano_idx_output = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+        ano_output = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_output, key="ano_output")
+        st.session_state.ano_selecionado = ano_output
     
     st.markdown("---")
     
-    # Carregar dados para ver campos disponíveis
-    df_base = carregar_dados_base(emp_output)
+    # Carregar dados completos
+    df_completo = carregar_dados_completos_relatorio(emp_output, ano_output, mes_output, {})
     
-    if df_base.empty:
+    if df_completo is None or df_completo.empty:
         st.warning("⚠️ Sem dados disponíveis")
         st.stop()
     
     st.subheader("🎯 Configurar Relatório")
+    
+    # GESTÃO DE TEMPLATES
+    with st.expander("📁 GESTÃO DE TEMPLATES", expanded=False):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("### 💾 Templates Salvos")
+            
+            if st.session_state.templates_relatorios:
+                for nome_template in st.session_state.templates_relatorios.keys():
+                    col_a, col_b, col_c = st.columns([3, 1, 1])
+                    
+                    with col_a:
+                        st.write(f"📋 **{nome_template}**")
+                        st.caption(f"{len(st.session_state.templates_relatorios[nome_template])} campos")
+                    
+                    with col_b:
+                        if st.button("📥 Carregar", key=f"load_{nome_template}"):
+                            st.session_state.campos_template_carregado = nome_template
+                            st.rerun()
+                    
+                    with col_c:
+                        if st.button("🗑️", key=f"del_tmpl_{nome_template}"):
+                            eliminar_template(nome_template)
+                            time.sleep(1)
+                            st.rerun()
+                    
+                    st.markdown("---")
+            else:
+                st.info("ℹ️ Nenhum template salvo")
+        
+        with col2:
+            st.markdown("### ➕ Novo Template")
+            
+            nome_novo_template = st.text_input("Nome do Template", 
+                                              placeholder="ex: Contabilidade",
+                                              key="nome_novo_template")
+            
+            if st.button("💾 Salvar Template Atual", use_container_width=True):
+                if nome_novo_template:
+                    if 'campos_selecionados_output' in st.session_state and st.session_state.campos_selecionados_output:
+                        salvar_template(nome_novo_template, st.session_state.campos_selecionados_output)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Selecione campos primeiro!")
+                else:
+                    st.warning("⚠️ Digite um nome para o template!")
+    
+    st.markdown("---")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.markdown("### 📋 Selecionar Campos")
         
-        # Campos disponíveis (remover campos internos)
-        campos_disponiveis = [col for col in df_base.columns if col not in ['Timestamp']]
+        # Campos disponíveis (todos os campos do df_completo)
+        campos_disponiveis = list(df_completo.columns)
         
-        # Campos pré-selecionados
+        # Campos básicos pré-selecionados
         campos_basicos = ['Nome Completo', 'Status', 'Secção', 'Salário Bruto', 
                          'Nº Horas/Semana', 'Data de Admissão']
+        
+        # Verificar se há template carregado
+        if 'campos_template_carregado' in st.session_state:
+            nome_template_carregado = st.session_state.campos_template_carregado
+            campos_default = carregar_template(nome_template_carregado)
+            st.info(f"📥 Template carregado: **{nome_template_carregado}**")
+            del st.session_state.campos_template_carregado
+        else:
+            campos_default = [c for c in campos_basicos if c in campos_disponiveis]
         
         campos_selecionados = st.multiselect(
             "Campos a incluir no relatório",
             options=campos_disponiveis,
-            default=[c for c in campos_basicos if c in campos_disponiveis],
-            help="Selecione os campos que deseja exportar"
+            default=campos_default,
+            help="Selecione os campos que deseja exportar",
+            key="campos_selecionados_output"
         )
     
     with col2:
@@ -1974,7 +2248,7 @@ elif menu == "📊 Output":
         )
         
         # Filtro de secção
-        seccoes = ['Todas'] + sorted(df_base['Secção'].dropna().unique().tolist())
+        seccoes = ['Todas'] + sorted(df_completo['Secção'].dropna().unique().tolist())
         seccao_filtro = st.selectbox(
             "Secção",
             seccoes,
@@ -1984,7 +2258,7 @@ elif menu == "📊 Output":
         # Formato de saída
         formato = st.radio(
             "Formato",
-            ["Excel (.xlsx)", "PDF"],
+            ["Excel (.xlsx)"],
             help="Formato do relatório"
         )
     
@@ -1993,22 +2267,23 @@ elif menu == "📊 Output":
     if not campos_selecionados:
         st.warning("⚠️ Selecione pelo menos um campo")
     else:
+        # Aplicar filtros para preview
+        df_preview = df_completo.copy()
+        
+        if status_filtro != "Todos":
+            df_preview = df_preview[df_preview['Status'] == status_filtro]
+        
+        if seccao_filtro != "Todas":
+            df_preview = df_preview[df_preview['Secção'] == seccao_filtro]
+        
+        # Selecionar campos
+        campos_preview = [c for c in campos_selecionados if c in df_preview.columns]
+        df_preview = df_preview[campos_preview]
+        
         # Preview
         with st.expander("👁️ PREVIEW DOS DADOS", expanded=True):
-            df_preview = df_base.copy()
-            
-            # Aplicar filtros
-            if status_filtro != "Todos":
-                df_preview = df_preview[df_preview['Status'] == status_filtro]
-            
-            if seccao_filtro != "Todas":
-                df_preview = df_preview[df_preview['Secção'] == seccao_filtro]
-            
-            # Selecionar campos
-            df_preview = df_preview[campos_selecionados]
-            
             st.dataframe(df_preview, use_container_width=True, hide_index=True)
-            st.caption(f"📊 {len(df_preview)} registos | {len(campos_selecionados)} campos")
+            st.caption(f"📊 {len(df_preview)} registos | {len(campos_preview)} campos")
         
         st.markdown("---")
         
@@ -2024,11 +2299,12 @@ elif menu == "📊 Output":
                     }
                     
                     if formato == "Excel (.xlsx)":
-                        output = gerar_relatorio_excel(emp_output, campos_selecionados, filtros)
+                        output = gerar_relatorio_excel(emp_output, ano_output, mes_output, 
+                                                      campos_selecionados, filtros)
                         
                         if output:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            nome_ficheiro = f"relatorio_{emp_output.replace(' ', '_')}_{timestamp}.xlsx"
+                            nome_ficheiro = f"relatorio_{emp_output.replace(' ', '_')}_{ano_output}_{mes_output:02d}_{timestamp}.xlsx"
                             
                             st.success("✅ Relatório gerado com sucesso!")
                             
@@ -2039,8 +2315,6 @@ elif menu == "📊 Output":
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
-                    else:
-                        st.info("📄 Exportação em PDF em desenvolvimento")
 
 # ==================== TABELA IRS ====================
 
@@ -2064,14 +2338,12 @@ elif menu == "📈 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v3.1 🚀 ATUALIZAÇÕES
-🚪 Rescisões integradas
-🔧 Gestão Status completa
-👥 Visão FTEs/Secção
-📊 Módulo Output
-🏦 Campo IBAN
-🏖️ "Não Pagar" subsídios
-💳 Unificação cartão refeição
+st.sidebar.info(f"""v3.2 🚀 ATUALIZAÇÕES
+🗑️ Eliminar registos individuais
+📁 Templates de relatórios
+🔍 Filtros Mês/Ano completos
+📊 Campos processamento em Output
+🎯 Filtro secção em visualizações
 """)
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
