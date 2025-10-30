@@ -12,7 +12,7 @@ import time
 import json
 
 st.set_page_config(
-    page_title="Processamento Salarial v3.3",
+    page_title="Processamento Salarial v3.4",
     page_icon="💰",
     layout="wide"
 )
@@ -33,12 +33,10 @@ dbx = dropbox.Dropbox(
 EMPRESAS = {
     "Magnetic Sky Lda": {
         "path": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Processamento Salários Magnetic/Gestão Colaboradores Magnetic.xlsx",
-        "tem_horas_extras": False,
         "pasta_baixas": "/Pedro Couto/Projectos/Alcalá_Arc_Amoreira/Gestão operacional/RH/Baixas Médicas"
     },
     "CCM Retail Lda": {
         "path": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Processamento salarial/Gestão Colaboradores.xlsx",
-        "tem_horas_extras": True,
         "pasta_baixas": "/Pedro Couto/Projectos/Pingo Doce/Pingo Doce/2. Operação/1. Recursos Humanos/Baixas Médicas"
     }
 }
@@ -302,9 +300,11 @@ def download_excel(empresa):
         return None
 
 def garantir_aba(wb, nome_aba, colunas):
+    """Garante que a aba existe, criando-a se necessário"""
     if nome_aba not in wb.sheetnames:
         ws = wb.create_sheet(nome_aba)
         ws.append(colunas)
+        st.info(f"✨ Aba '{nome_aba}' criada")
         return True
     return False
 
@@ -644,8 +644,6 @@ def gravar_snapshot(empresa, snapshot):
             return False
         
         aba_criada = garantir_aba(wb, nome_aba, COLUNAS_SNAPSHOT)
-        if aba_criada:
-            st.info(f"✨ Aba '{nome_aba}' criada")
         
         ws = wb[nome_aba]
         
@@ -673,10 +671,11 @@ def gravar_snapshot(empresa, snapshot):
         return False
 
 def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_fim, obs, ficheiro_path=None):
-    """Grava registo de falta ou baixa"""
+    """Grava registo de falta ou baixa - VERSÃO CORRIGIDA"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
+            st.error("❌ Erro ao baixar Excel")
             return False
         
         wb = load_workbook(excel_file, data_only=False, keep_vba=True)
@@ -686,7 +685,14 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
             return False
         
         nome_aba = get_nome_aba_faltas_baixas(ano, mes)
-        garantir_aba(wb, nome_aba, COLUNAS_FALTAS_BAIXAS)
+        
+        # GARANTIR que a aba seja criada
+        aba_foi_criada = garantir_aba(wb, nome_aba, COLUNAS_FALTAS_BAIXAS)
+        
+        # Verificar se a aba realmente existe
+        if nome_aba not in wb.sheetnames:
+            st.error(f"❌ ERRO: Falha ao criar aba '{nome_aba}'")
+            return False
         
         ws = wb[nome_aba]
         
@@ -709,14 +715,20 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         
         ws.append(nova_linha)
         
+        # DEBUG: Verificar quantas linhas tem
+        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas")
+        
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ {tipo} registada: {dias_uteis} dias úteis / {dias_totais} dias totais")
+            st.success(f"✅ Aba '{nome_aba}' {'criada' if aba_foi_criada else 'atualizada'}")
             return True
         
         return False
         
     except Exception as e:
-        st.error(f"❌ Erro ao gravar: {e}")
+        st.error(f"❌ Erro ao gravar falta/baixa: {e}")
+        import traceback
+        st.error(f"🔍 Detalhes: {traceback.format_exc()}")
         return False
 
 def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
@@ -754,10 +766,11 @@ def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
         return False
 
 def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, h_feriados, h_extra, outros_prov, obs):
-    """Grava registo de horas extras e outros proveitos"""
+    """Grava registo de horas extras e outros proveitos - VERSÃO CORRIGIDA"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
+            st.error("❌ Erro ao baixar Excel")
             return False
         
         wb = load_workbook(excel_file, data_only=False, keep_vba=True)
@@ -767,7 +780,14 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
             return False
         
         nome_aba = get_nome_aba_horas_extras(ano, mes)
-        garantir_aba(wb, nome_aba, COLUNAS_HORAS_EXTRAS)
+        
+        # GARANTIR que a aba seja criada
+        aba_foi_criada = garantir_aba(wb, nome_aba, COLUNAS_HORAS_EXTRAS)
+        
+        # Verificar se a aba realmente existe
+        if nome_aba not in wb.sheetnames:
+            st.error(f"❌ ERRO: Falha ao criar aba '{nome_aba}'")
+            return False
         
         ws = wb[nome_aba]
         
@@ -786,14 +806,20 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         
         ws.append(nova_linha)
         
+        # DEBUG: Verificar quantas linhas tem
+        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas")
+        
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ Horas extras/proveitos registados")
+            st.success(f"✅ Aba '{nome_aba}' {'criada' if aba_foi_criada else 'atualizada'}")
             return True
         
         return False
         
     except Exception as e:
-        st.error(f"❌ Erro ao gravar: {e}")
+        st.error(f"❌ Erro ao gravar horas extras: {e}")
+        import traceback
+        st.error(f"🔍 Detalhes: {traceback.format_exc()}")
         return False
 
 def eliminar_registo_horas_extras(empresa, ano, mes, linha_idx):
@@ -966,7 +992,7 @@ def processar_calculo_salario(dados_form):
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
     
-    # CORREÇÃO: Base IRS = todas as remunerações EXCETO subsídio alimentação
+    # Base IRS = todas as remunerações EXCETO subsídio alimentação
     base_irs = (vencimento_ajustado + trabalho_noturno + domingos + feriados + 
                 sub_ferias + sub_natal + banco_horas_valor + outros_proveitos)
     
@@ -1256,8 +1282,8 @@ def criar_filtros_padrao(prefix, incluir_colaborador=True):
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v3.3")
-st.caption("✨ v3.3: Base IRS corrigida + Campos segmentados + Filtros persistentes")
+st.title("💰 Processamento Salarial v3.4")
+st.caption("✨ v3.4: Horas extras para TODAS empresas + Correção criação de abas")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -1810,8 +1836,9 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # HORAS EXTRAS
+    # HORAS EXTRAS - DISPONÍVEL PARA TODAS AS EMPRESAS
     st.subheader("⏰ Horas Extras e Outros Proveitos")
+    st.info("💡 Módulo disponível para TODAS as empresas")
     
     tab_registar, tab_historico_extras = st.tabs(["➕ Registar", "📜 Histórico"])
     
@@ -2295,11 +2322,11 @@ elif menu == "📈 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v3.3 🚀 ATUALIZAÇÕES
-✅ Base IRS corrigida
-📋 Campos segmentados por categoria
-🔄 Filtros persistentes entre módulos
-🎯 Melhor organização
+st.sidebar.info(f"""v3.4 🚀 ATUALIZAÇÕES
+✅ Horas extras para TODAS empresas
+✅ Correção criação de abas
+🔍 Logs adicionados
+📊 Verificações reforçadas
 """)
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
