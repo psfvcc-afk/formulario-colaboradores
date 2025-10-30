@@ -12,7 +12,7 @@ import time
 import json
 
 st.set_page_config(
-    page_title="Processamento Salarial v3.5",
+    page_title="Processamento Salarial v3.5.1",
     page_icon="💰",
     layout="wide"
 )
@@ -82,6 +82,7 @@ MOTIVOS_RESCISAO = [
     "Outro (especificar em observações)"
 ]
 
+# v3.5.1: ATUALIZADO - Removido "Nº CC" e "Validade CC", adicionado "Documento de Identificação" e "Validade Documento"
 COLUNAS_SNAPSHOT = [
     "Nome Completo", "Ano", "Mês", "Nº Horas/Semana", "Subsídio Alimentação Diário",
     "Número Pingo Doce", "Salário Bruto", "Vencimento Hora", 
@@ -90,7 +91,7 @@ COLUNAS_SNAPSHOT = [
     "Cartão Refeição", "Sub Férias Tipo", "Sub Natal Tipo",
     "Status", "Data Rescisão", "Motivo Rescisão", 
     "NIF", "NISS", "Data de Admissão", "IBAN", "Secção", 
-    "E-mail", "Data de Nascimento", "Nº CC", "Validade CC", 
+    "E-mail", "Data de Nascimento", "Documento de Identificação", "Validade Documento", 
     "Nacionalidade", "Telemóvel", "Bairro Fiscal", "Morada", 
     "Cod Postal", "Categoria Profissional", "Timestamp"
 ]
@@ -134,14 +135,14 @@ MAPEAMENTO_DEFICIENCIA = {
     "N": "Não"
 }
 
-# Categorias de campos para Output - v3.5 ATUALIZADO
+# v3.5.1: Categorias de campos para Output - ATUALIZADO
 CATEGORIAS_CAMPOS = {
     "👤 Dados Pessoais": [
         "Nome Completo", "Bairro Fiscal", "Categoria Profissional", "Cod Postal", 
         "Data de Admissão", "Data de Nascimento", "E-mail", "IBAN", 
-        "Morada", "Nacionalidade", "NIF", "NISS", "Nº CC", 
+        "Morada", "Nacionalidade", "NIF", "NISS", "Documento de Identificação", 
         "Estado Civil", "Nº Titulares", "Nº Dependentes", "Deficiência",
-        "Telemóvel", "Validade CC"
+        "Telemóvel", "Validade Documento"
     ],
     "💼 Dados Profissionais": [
         "Status", "Secção", "Número Pingo Doce", "Data Rescisão", "Motivo Rescisão"
@@ -322,22 +323,8 @@ def download_excel(empresa):
         st.error(f"❌ Erro ao baixar Excel: {e}")
         return None
 
-def criar_backup_dropbox(empresa):
-    """Cria backup do ficheiro antes de modificar - v3.5"""
-    try:
-        file_path = EMPRESAS[empresa]["path"]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = file_path.replace(".xlsx", f"_backup_{timestamp}.xlsx")
-        
-        dbx.files_copy_v2(file_path, backup_path)
-        st.info(f"💾 Backup criado: ...{backup_path[-40:]}")
-        return True
-    except Exception as e:
-        st.warning(f"⚠️ Não foi possível criar backup: {e}")
-        return False
-
 def garantir_aba(wb, nome_aba, colunas):
-    """Garante que a aba existe, criando-a se necessário - v3.5"""
+    """Garante que a aba existe, criando-a se necessário"""
     if nome_aba not in wb.sheetnames:
         ws = wb.create_sheet(nome_aba)
         ws.append(colunas)
@@ -352,7 +339,7 @@ def garantir_aba(wb, nome_aba, colunas):
     return False
 
 def validar_workbook(wb):
-    """Valida integridade do workbook - v3.5"""
+    """Valida integridade do workbook"""
     try:
         if "Colaboradores" not in wb.sheetnames:
             st.error("🚨 CRÍTICO: Aba 'Colaboradores' não encontrada!")
@@ -363,7 +350,6 @@ def validar_workbook(wb):
             st.error("🚨 CRÍTICO: Aba 'Colaboradores' está vazia!")
             return False
         
-        # Verificar se há pelo menos uma coluna
         if ws_colab.max_column < 1:
             st.error("🚨 CRÍTICO: Aba 'Colaboradores' sem colunas!")
             return False
@@ -374,15 +360,12 @@ def validar_workbook(wb):
         return False
 
 def upload_excel_seguro(empresa, wb):
-    """Upload com validação robusta e backup - v3.5 MELHORADO"""
+    """Upload com validação robusta - v3.5.1 SEM BACKUP"""
     try:
         # VALIDAÇÃO PRÉ-UPLOAD
         if not validar_workbook(wb):
             st.error("❌ Validação falhou - upload cancelado!")
             return False
-        
-        # CRIAR BACKUP
-        criar_backup_dropbox(empresa)
         
         # PREPARAR UPLOAD
         file_path = EMPRESAS[empresa]["path"]
@@ -407,7 +390,7 @@ def upload_excel_seguro(empresa, wb):
         dbx.files_upload(output.read(), file_path, mode=dropbox.files.WriteMode.overwrite)
         
         # VERIFICAR upload
-        time.sleep(0.5)  # Pequena pausa para garantir sincronização
+        time.sleep(0.3)
         
         ws_colab = wb["Colaboradores"]
         st.success(f"✅ Excel salvo ({ws_colab.max_row-1} colaboradores, {file_size:,} bytes)")
@@ -499,13 +482,13 @@ def calcular_irs(base_incidencia, modo_calculo, percentagem_fixa, estado_civil, 
 # ==================== FUNÇÕES DE DADOS BASE ====================
 
 def carregar_dados_base(empresa):
-    """Lê sempre da aba 'Colaboradores' - v3.5"""
+    """Lê sempre da aba 'Colaboradores'"""
     excel_file = download_excel(empresa)
     if excel_file:
         try:
             df = pd.read_excel(excel_file, sheet_name="Colaboradores")
             
-            # Garantir colunas essenciais
+            # v3.5.1: Garantir colunas essenciais ATUALIZADAS
             colunas_essenciais = {
                 'Status': 'Ativo',
                 'Salário Bruto': 870.0,
@@ -517,8 +500,8 @@ def carregar_dados_base(empresa):
                 'IBAN': '',
                 'E-mail': '',
                 'Data de Nascimento': '',
-                'Nº CC': '',
-                'Validade CC': '',
+                'Documento de Identificação': '',
+                'Validade Documento': '',
                 'Nacionalidade': '',
                 'Telemóvel': '',
                 'Bairro Fiscal': '',
@@ -556,7 +539,7 @@ def carregar_colaboradores_ativos(empresa, ano=None, mes=None):
     return colaboradores
 
 def atualizar_status_colaborador(empresa, colaborador, novo_status):
-    """Atualiza Status APENAS na aba Colaboradores - v3.5"""
+    """Atualiza Status APENAS na aba Colaboradores"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -575,6 +558,9 @@ def atualizar_status_colaborador(empresa, colaborador, novo_status):
             return False
         
         wb = load_workbook(excel_file, data_only=False)
+        
+        if not validar_workbook(wb):
+            return False
         
         if "Colaboradores" in wb.sheetnames:
             idx = wb.sheetnames.index("Colaboradores")
@@ -597,7 +583,7 @@ def atualizar_status_colaborador(empresa, colaborador, novo_status):
         return False
 
 def criar_snapshot_inicial(empresa, colaborador, ano, mes):
-    """Cria snapshot inicial - v3.5 com novos campos"""
+    """Cria snapshot inicial - v3.5.1 com campos atualizados"""
     df_base = carregar_dados_base(empresa)
     dados_colab = df_base[df_base['Nome Completo'] == colaborador]
     
@@ -654,8 +640,8 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
         "Secção": str(dados.get('Secção', '')),
         "E-mail": str(dados.get('E-mail', '')),
         "Data de Nascimento": str(dados.get('Data de Nascimento', '')),
-        "Nº CC": str(dados.get('Nº CC', '')),
-        "Validade CC": str(dados.get('Validade CC', '')),
+        "Documento de Identificação": str(dados.get('Documento de Identificação', '')),
+        "Validade Documento": str(dados.get('Validade Documento', '')),
         "Nacionalidade": str(dados.get('Nacionalidade', '')),
         "Telemóvel": str(dados.get('Telemóvel', '')),
         "Bairro Fiscal": str(dados.get('Bairro Fiscal', '')),
@@ -668,7 +654,7 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     return snapshot
 
 def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
-    """Carrega último snapshot com dados ATUALIZADOS - v3.5"""
+    """Carrega último snapshot com dados ATUALIZADOS - v3.5.1"""
     excel_file = download_excel(empresa)
     if not excel_file:
         return None
@@ -712,11 +698,11 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
                     snapshot['IRS Percentagem Fixa'] = normalizar_percentagem_irs(dados.get('% IRS Fixa', snapshot.get('IRS Percentagem Fixa', 0)))
                     snapshot['IBAN'] = str(dados.get('IBAN', snapshot.get('IBAN', '')))
                     
-                    # Novos campos v3.5
+                    # v3.5.1: Campos atualizados
                     snapshot['E-mail'] = str(dados.get('E-mail', snapshot.get('E-mail', '')))
                     snapshot['Data de Nascimento'] = str(dados.get('Data de Nascimento', snapshot.get('Data de Nascimento', '')))
-                    snapshot['Nº CC'] = str(dados.get('Nº CC', snapshot.get('Nº CC', '')))
-                    snapshot['Validade CC'] = str(dados.get('Validade CC', snapshot.get('Validade CC', '')))
+                    snapshot['Documento de Identificação'] = str(dados.get('Documento de Identificação', snapshot.get('Documento de Identificação', '')))
+                    snapshot['Validade Documento'] = str(dados.get('Validade Documento', snapshot.get('Validade Documento', '')))
                     snapshot['Nacionalidade'] = str(dados.get('Nacionalidade', snapshot.get('Nacionalidade', '')))
                     snapshot['Telemóvel'] = str(dados.get('Telemóvel', snapshot.get('Telemóvel', '')))
                     snapshot['Bairro Fiscal'] = str(dados.get('Bairro Fiscal', snapshot.get('Bairro Fiscal', '')))
@@ -743,7 +729,7 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
         return None
 
 def gravar_snapshot(empresa, snapshot):
-    """Grava snapshot SEM mexer na aba Colaboradores - v3.5"""
+    """Grava snapshot SEM mexer na aba Colaboradores"""
     try:
         if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
             snapshot['Status'] = 'Ativo'
@@ -793,24 +779,21 @@ def gravar_snapshot(empresa, snapshot):
         return False
 
 def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_fim, obs, ficheiro_path=None):
-    """Grava registo de falta ou baixa - v3.5 ULTRA ROBUSTO"""
+    """Grava registo de falta ou baixa - v3.5.1"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             st.error("❌ Erro ao baixar Excel")
             return False
         
-        # CARREGAR workbook com cuidado
         wb = load_workbook(excel_file, data_only=False)
         
-        # VALIDAR antes de qualquer operação
         if not validar_workbook(wb):
             st.error("❌ Validação inicial falhou")
             return False
         
         nome_aba = get_nome_aba_faltas_baixas(ano, mes)
         
-        # GARANTIR aba existe
         aba_foi_criada = garantir_aba(wb, nome_aba, COLUNAS_FALTAS_BAIXAS)
         
         if nome_aba not in wb.sheetnames:
@@ -819,11 +802,9 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         
         ws = wb[nome_aba]
         
-        # CALCULAR dias
         feriados = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
         dias_uteis, dias_totais = calcular_dias_entre_datas(data_inicio, data_fim, feriados)
         
-        # PREPARAR linha
         nova_linha = [
             colaborador,
             ano,
@@ -838,18 +819,12 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
         
-        # ADICIONAR linha
         ws.append(nova_linha)
         
-        # LOGS
-        st.info(f"📊 Aba '{nome_aba}' agora tem {ws.max_row} linhas (incluindo cabeçalho)")
-        
-        # VALIDAR novamente antes de upload
         if not validar_workbook(wb):
             st.error("❌ Validação pós-modificação falhou")
             return False
         
-        # UPLOAD SEGURO
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ {tipo} registada: {dias_uteis} dias úteis / {dias_totais} dias totais")
             if aba_foi_criada:
@@ -865,7 +840,7 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         return False
 
 def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
-    """Elimina um registo específico de falta/baixa - v3.5"""
+    """Elimina um registo específico de falta/baixa"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -905,24 +880,21 @@ def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
         return False
 
 def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, h_feriados, h_extra, outros_prov, obs):
-    """Grava registo de horas extras - v3.5 ULTRA ROBUSTO"""
+    """Grava registo de horas extras - v3.5.1"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             st.error("❌ Erro ao baixar Excel")
             return False
         
-        # CARREGAR workbook com cuidado
         wb = load_workbook(excel_file, data_only=False)
         
-        # VALIDAR antes de qualquer operação
         if not validar_workbook(wb):
             st.error("❌ Validação inicial falhou")
             return False
         
         nome_aba = get_nome_aba_horas_extras(ano, mes)
         
-        # GARANTIR aba existe
         aba_foi_criada = garantir_aba(wb, nome_aba, COLUNAS_HORAS_EXTRAS)
         
         if nome_aba not in wb.sheetnames:
@@ -931,7 +903,6 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         
         ws = wb[nome_aba]
         
-        # PREPARAR linha
         nova_linha = [
             colaborador,
             ano,
@@ -945,18 +916,12 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
         
-        # ADICIONAR linha
         ws.append(nova_linha)
         
-        # LOGS
-        st.info(f"📊 Aba '{nome_aba}' agora tem {ws.max_row} linhas (incluindo cabeçalho)")
-        
-        # VALIDAR novamente antes de upload
         if not validar_workbook(wb):
             st.error("❌ Validação pós-modificação falhou")
             return False
         
-        # UPLOAD SEGURO
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ Horas extras/proveitos registados")
             if aba_foi_criada:
@@ -972,7 +937,7 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         return False
 
 def eliminar_registo_horas_extras(empresa, ano, mes, linha_idx):
-    """Elimina um registo específico de horas extras - v3.5"""
+    """Elimina um registo específico de horas extras"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -1058,7 +1023,7 @@ def carregar_horas_extras(empresa, ano, mes, colaborador=None):
         return pd.DataFrame()
 
 def registar_rescisao_colaborador(empresa, colaborador, data_rescisao, motivo, obs):
-    """Registra rescisão na aba Colaboradores - v3.5"""
+    """Registra rescisão na aba Colaboradores"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -1251,7 +1216,7 @@ def calcular_ftes_e_estatisticas(empresa, ano=None, mes=None):
     }
 
 def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
-    """Carrega dados completos incluindo faltas/baixas e horas extras - v3.5"""
+    """Carrega dados completos incluindo faltas/baixas e horas extras"""
     try:
         df_base = carregar_dados_base(empresa)
         
@@ -1268,7 +1233,7 @@ def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
         if filtros.get('seccao') and filtros['seccao'] != 'Todas':
             df_filtrado = df_filtrado[df_filtrado['Secção'] == filtros['seccao']]
         
-        # v3.5: Filtro de Colaboradores
+        # Filtro de Colaboradores
         if filtros.get('colaboradores') and len(filtros['colaboradores']) > 0:
             df_filtrado = df_filtrado[df_filtrado['Nome Completo'].isin(filtros['colaboradores'])]
         
@@ -1388,42 +1353,64 @@ def eliminar_template(nome):
         return True
     return False
 
-# ==================== FUNÇÕES AUXILIARES PARA FILTROS ====================
-
-def sync_filtros_from_sidebar(prefix):
-    """Sincroniza filtros do sidebar para session_state"""
-    if f"{prefix}_emp" in st.session_state:
-        st.session_state.empresa_selecionada = st.session_state[f"{prefix}_emp"]
-    if f"{prefix}_mes" in st.session_state:
-        st.session_state.mes_selecionado = st.session_state[f"{prefix}_mes"]
-    if f"{prefix}_ano" in st.session_state:
-        st.session_state.ano_selecionado = st.session_state[f"{prefix}_ano"]
+# ==================== FUNÇÕES AUXILIARES PARA FILTROS - v3.5.1 CORRIGIDO ====================
 
 def criar_filtros_padrao(prefix, incluir_colaborador=True):
-    """Cria filtros padrão consistentes"""
+    """Cria filtros padrão consistentes que mantêm o estado - v3.5.1"""
     col1, col2, col3 = st.columns(3)
     
     with col1:
+        # Usar session_state como source of truth
         emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada in EMPRESAS else 0
-        emp = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, 
-                          key=f"{prefix}_emp", on_change=lambda: sync_filtros_from_sidebar(prefix))
-        st.session_state.empresa_selecionada = emp
+        
+        emp = st.selectbox(
+            "Empresa", 
+            list(EMPRESAS.keys()), 
+            index=emp_idx, 
+            key=f"{prefix}_emp"
+        )
+        
+        # Atualizar session_state quando mudar
+        if emp != st.session_state.empresa_selecionada:
+            st.session_state.empresa_selecionada = emp
+            st.session_state.colaborador_selecionado = None  # Reset colaborador
     
     with col2:
-        mes = st.selectbox("Mês", list(range(1, 13)),
-                          format_func=lambda x: calendar.month_name[x],
-                          index=st.session_state.mes_selecionado - 1, 
-                          key=f"{prefix}_mes", on_change=lambda: sync_filtros_from_sidebar(prefix))
-        st.session_state.mes_selecionado = mes
+        # Usar session_state como source of truth
+        mes = st.selectbox(
+            "Mês", 
+            list(range(1, 13)),
+            format_func=lambda x: calendar.month_name[x],
+            index=st.session_state.mes_selecionado - 1, 
+            key=f"{prefix}_mes"
+        )
+        
+        # Atualizar session_state quando mudar
+        if mes != st.session_state.mes_selecionado:
+            st.session_state.mes_selecionado = mes
     
     with col3:
+        # Usar session_state como source of truth
         ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-        ano = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, 
-                          key=f"{prefix}_ano", on_change=lambda: sync_filtros_from_sidebar(prefix))
-        st.session_state.ano_selecionado = ano
+        
+        ano = st.selectbox(
+            "Ano", 
+            [2024, 2025, 2026], 
+            index=ano_idx, 
+            key=f"{prefix}_ano"
+        )
+        
+        # Atualizar session_state quando mudar
+        if ano != st.session_state.ano_selecionado:
+            st.session_state.ano_selecionado = ano
     
     if incluir_colaborador:
-        colabs = carregar_colaboradores_ativos(emp, ano, mes)
+        # Usar valores atualizados do session_state
+        emp_atual = st.session_state.empresa_selecionada
+        ano_atual = st.session_state.ano_selecionado
+        mes_atual = st.session_state.mes_selecionado
+        
+        colabs = carregar_colaboradores_ativos(emp_atual, ano_atual, mes_atual)
         
         if colabs:
             if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs:
@@ -1433,21 +1420,24 @@ def criar_filtros_padrao(prefix, incluir_colaborador=True):
                 st.session_state.colaborador_selecionado = colabs[0]
             
             colab = st.selectbox("Colaborador", colabs, index=colab_idx, key=f"{prefix}_col")
-            st.session_state.colaborador_selecionado = colab
             
-            return emp, mes, ano, colab
+            # Atualizar session_state
+            if colab != st.session_state.colaborador_selecionado:
+                st.session_state.colaborador_selecionado = colab
+            
+            return st.session_state.empresa_selecionada, st.session_state.mes_selecionado, st.session_state.ano_selecionado, colab
         else:
-            return emp, mes, ano, None
+            return st.session_state.empresa_selecionada, st.session_state.mes_selecionado, st.session_state.ano_selecionado, None
     
-    return emp, mes, ano
+    return st.session_state.empresa_selecionada, st.session_state.mes_selecionado, st.session_state.ano_selecionado
 
 # ==================== INTERFACE ====================
 
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v3.5")
-st.caption("✨ v3.5: Categoria Profissional + Novos campos pessoais + Filtros Output + CORREÇÃO ROBUSTA ficheiros corrompidos")
+st.title("💰 Processamento Salarial v3.5.1")
+st.caption("✨ v3.5.1: CORREÇÕES - Campos Documento ID | Limpar todos os campos | Manter seleção empresa/mês/ano | Remover backups")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -1779,7 +1769,6 @@ if menu == "⚙️ Configurações":
     
     with tab5:
         st.subheader("🏢 Categoria Profissional")
-        st.caption("✨ v3.5: Nova funcionalidade")
         
         emp, mes, ano, colab = criar_filtros_padrao("cat", incluir_colaborador=True)
         
@@ -1801,14 +1790,12 @@ if menu == "⚙️ Configurações":
                 with st.form("form_categoria"):
                     st.markdown(f"### Definir Categoria Profissional - {colab}")
                     
-                    # Obter categorias disponíveis para a empresa
                     categorias_empresa = CATEGORIAS_PROFISSIONAIS.get(emp, [])
                     
                     if not categorias_empresa:
                         st.warning(f"⚠️ Sem categorias definidas para {emp}")
                         st.stop()
                     
-                    # Encontrar índice da categoria atual
                     if cat_atual and cat_atual in categorias_empresa:
                         cat_idx = categorias_empresa.index(cat_atual)
                     else:
@@ -1865,9 +1852,9 @@ if menu == "⚙️ Configurações":
         
         col1, col2 = st.columns(2)
         with col1:
-            emp_idx_status = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada in EMPRESAS else 0
-            emp_status = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_status, key="emp_status")
-            st.session_state.empresa_selecionada = emp_status
+            emp_status = st.selectbox("Empresa", list(EMPRESAS.keys()), 
+                                     index=list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada), 
+                                     key="emp_status_tab")
         with col2:
             mostrar = st.radio("Mostrar", ["Ativos", "Inativos", "Todos"], horizontal=True)
         
@@ -2449,11 +2436,15 @@ elif menu == "📊 Output":
     with col1:
         st.markdown("### 📋 Selecionar Campos por Categoria")
         
-        # v3.5: Botão Limpar Campos
+        # v3.5.1: Botão Limpar Campos CORRIGIDO
         if st.button("🗑️ Limpar Todos os Campos", use_container_width=True, type="secondary"):
             st.session_state.campos_selecionados_output = []
-            st.success("✅ Campos limpos!")
-            time.sleep(1)
+            # Limpar também os multiselects individuais forçando rerun
+            for categoria in CATEGORIAS_CAMPOS.keys():
+                if f"campos_{categoria}" in st.session_state:
+                    del st.session_state[f"campos_{categoria}"]
+            st.success("✅ Todos os campos limpos!")
+            time.sleep(0.5)
             st.rerun()
         
         st.markdown("---")
@@ -2481,8 +2472,13 @@ elif menu == "📊 Output":
                     elif st.session_state.campos_selecionados_output:
                         campos_default = [c for c in campos_disponiveis if c in st.session_state.campos_selecionados_output]
                     else:
-                        # Pré-selecionar campos básicos
-                        campos_basicos = ['Nome Completo', 'Status', 'Secção', 'Salário Bruto']
+                        # Pré-selecionar campos básicos apenas em Dados Pessoais e Dados Salariais
+                        if categoria == "👤 Dados Pessoais":
+                            campos_basicos = ['Nome Completo']
+                        elif categoria == "💰 Dados Salariais":
+                            campos_basicos = ['Salário Bruto']
+                        else:
+                            campos_basicos = []
                         campos_default = [c for c in campos_disponiveis if c in campos_basicos]
                     
                     # Multiselect para cada categoria
@@ -2502,11 +2498,11 @@ elif menu == "📊 Output":
     with col2:
         st.markdown("### 🔍 Filtros")
         
-        # v3.5: Status predefinido "Ativo"
+        # Status predefinido "Ativo"
         status_filtro = st.selectbox(
             "Status",
             ["Ativo", "Inativo", "Todos"],
-            index=0,  # "Ativo" por defeito
+            index=0,
             help="Filtrar por status do colaborador"
         )
         
@@ -2517,7 +2513,7 @@ elif menu == "📊 Output":
             help="Filtrar por secção"
         )
         
-        # v3.5: Filtro por Colaborador (múltipla seleção)
+        # Filtro por Colaborador (múltipla seleção)
         st.markdown("**Colaboradores**")
         todos_colaboradores = sorted(df_completo['Nome Completo'].unique().tolist())
         
@@ -2549,7 +2545,7 @@ elif menu == "📊 Output":
         if seccao_filtro != "Todas":
             df_preview = df_preview[df_preview['Secção'] == seccao_filtro]
         
-        # v3.5: Aplicar filtro de colaboradores
+        # Aplicar filtro de colaboradores
         if colaboradores_selecionados:
             df_preview = df_preview[df_preview['Nome Completo'].isin(colaboradores_selecionados)]
         
@@ -2570,7 +2566,7 @@ elif menu == "📊 Output":
                     filtros = {
                         'status': status_filtro,
                         'seccao': seccao_filtro,
-                        'colaboradores': colaboradores_selecionados  # v3.5
+                        'colaboradores': colaboradores_selecionados
                     }
                     
                     if formato == "Excel (.xlsx)":
@@ -2613,14 +2609,12 @@ elif menu == "📈 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.success(f"""✅ v3.5 NOVAS FUNCIONALIDADES:
-- 🏢 Categoria Profissional
-- 📋 Novos campos pessoais
-- 🔍 Filtros melhorados (Status/Colaborador)
-- 🗑️ Botão Limpar Campos
-- 🛡️ CORREÇÃO ROBUSTA ficheiros corrompidos
-- 💾 Sistema de backup automático
-- ✅ Validação completa de integridade
+st.sidebar.success(f"""✅ v3.5.1 CORREÇÕES:
+- 🆔 Campos "Documento de Identificação" e "Validade Documento"
+- 🗑️ Botão limpar campos agora limpa TODAS as categorias
+- 🔄 Manter seleção empresa/mês/ano entre navegações
+- 💾 Removido sistema de backups automáticos
+- ✅ Prevenir ficheiros corrompidos
 """)
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
