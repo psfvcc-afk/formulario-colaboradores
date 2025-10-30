@@ -142,23 +142,32 @@ if 'colaborador_selecionado' not in st.session_state:
     st.session_state.colaborador_selecionado = None
 if 'templates_relatorios' not in st.session_state:
     st.session_state.templates_relatorios = {}
+if 'password_incorrect' not in st.session_state:
+    st.session_state.password_incorrect = False
 
 # ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 
 def check_password():
     def password_entered():
-        if st.session_state["password"] == ADMIN_PASSWORD:
-            st.session_state.authenticated = True
-            del st.session_state["password"]
-        else:
-            st.session_state.authenticated = False
+        # Verificar se a chave existe antes de acessar
+        if "password" in st.session_state:
+            if st.session_state["password"] == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                del st.session_state["password"]
+            else:
+                st.session_state.authenticated = False
+                st.session_state.password_incorrect = True
     
     if not st.session_state.authenticated:
         st.title("🔒 Processamento Salarial - Login")
         st.markdown("---")
         st.text_input("Password de Administrador", type="password", key="password", on_change=password_entered)
-        if "password" in st.session_state and not st.session_state.authenticated:
+        
+        # Mostrar erro se a password estiver incorreta
+        if st.session_state.get("password_incorrect", False):
             st.error("❌ Password incorreta")
+            st.session_state.password_incorrect = False
+        
         return False
     return True
 
