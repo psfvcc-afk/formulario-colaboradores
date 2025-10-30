@@ -12,7 +12,7 @@ import time
 import json
 
 st.set_page_config(
-    page_title="Processamento Salarial v3.2",
+    page_title="Processamento Salarial v3.3",
     page_icon="💰",
     layout="wide"
 )
@@ -118,6 +118,32 @@ MAPEAMENTO_DEFICIENCIA = {
     "N": "Não"
 }
 
+# Categorias de campos para Output
+CATEGORIAS_CAMPOS = {
+    "👤 Dados Pessoais": [
+        "Nome Completo", "NIF", "NISS", "Data de Admissão", "IBAN",
+        "Estado Civil", "Nº Titulares", "Nº Dependentes", "Deficiência"
+    ],
+    "💼 Dados Profissionais": [
+        "Status", "Secção", "Número Pingo Doce", "Data Rescisão", "Motivo Rescisão"
+    ],
+    "💰 Dados Salariais": [
+        "Salário Bruto", "Nº Horas/Semana", "Vencimento Hora",
+        "Subsídio Alimentação Diário", "Cartão Refeição",
+        "Sub Férias Tipo", "Sub Natal Tipo"
+    ],
+    "📊 Dados IRS": [
+        "IRS Modo Calculo", "IRS Percentagem Fixa"
+    ],
+    "🏖️ Faltas e Baixas": [
+        "Total Faltas (dias)", "Total Baixas (dias)", "Total Faltas+Baixas"
+    ],
+    "⏰ Horas Extras": [
+        "Horas Noturnas", "Horas Domingos", "Horas Feriados",
+        "Horas Extra", "Total Horas Extras", "Outros Proveitos"
+    ]
+}
+
 # ==================== SESSION STATE ====================
 
 if 'authenticated' not in st.session_state:
@@ -133,7 +159,7 @@ if 'tabela_irs' not in st.session_state:
 if 'dados_processamento' not in st.session_state:
     st.session_state.dados_processamento = {}
 if 'empresa_selecionada' not in st.session_state:
-    st.session_state.empresa_selecionada = None
+    st.session_state.empresa_selecionada = list(EMPRESAS.keys())[0]
 if 'mes_selecionado' not in st.session_state:
     st.session_state.mes_selecionado = datetime.now().month
 if 'ano_selecionado' not in st.session_state:
@@ -149,7 +175,6 @@ if 'password_incorrect' not in st.session_state:
 
 def check_password():
     def password_entered():
-        # Verificar se a chave existe antes de acessar
         if "password" in st.session_state:
             if st.session_state["password"] == ADMIN_PASSWORD:
                 st.session_state.authenticated = True
@@ -163,7 +188,6 @@ def check_password():
         st.markdown("---")
         st.text_input("Password de Administrador", type="password", key="password", on_change=password_entered)
         
-        # Mostrar erro se a password estiver incorreta
         if st.session_state.get("password_incorrect", False):
             st.error("❌ Password incorreta")
             st.session_state.password_incorrect = False
@@ -711,7 +735,6 @@ def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
         
         ws = wb[nome_aba]
         
-        # Linha Excel = linha_idx + 2 (header + índice base 0)
         linha_excel = linha_idx + 2
         
         if linha_excel > ws.max_row:
@@ -943,7 +966,9 @@ def processar_calculo_salario(dados_form):
     base_ss = total_remuneracoes - sub_alimentacao
     seg_social = base_ss * 0.11
     
-    base_irs = salario_bruto + sub_ferias + sub_natal
+    # CORREÇÃO: Base IRS = todas as remunerações EXCETO subsídio alimentação
+    base_irs = (vencimento_ajustado + trabalho_noturno + domingos + feriados + 
+                sub_ferias + sub_natal + banco_horas_valor + outros_proveitos)
     
     irs = calcular_irs(
         base_incidencia=base_irs,
@@ -1045,13 +1070,11 @@ def calcular_ftes_e_estatisticas(empresa, ano=None, mes=None):
 def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
     """Carrega dados completos incluindo faltas/baixas e horas extras"""
     try:
-        # Dados base
         df_base = carregar_dados_base(empresa)
         
         if df_base.empty:
             return None
         
-        # Aplicar filtros básicos
         df_filtrado = df_base.copy()
         
         if filtros.get('status') and filtros['status'] != 'Todos':
@@ -1060,20 +1083,16 @@ def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
         if filtros.get('seccao') and filtros['seccao'] != 'Todas':
             df_filtrado = df_filtrado[df_filtrado['Secção'] == filtros['seccao']]
         
-        # Carregar faltas e baixas
         df_faltas_baixas = carregar_faltas_baixas(empresa, ano, mes)
         
-        # Carregar horas extras
         df_horas_extras = carregar_horas_extras(empresa, ano, mes)
         
-        # Agregar dados por colaborador
         resultado = []
         
         for _, row in df_filtrado.iterrows():
             nome = row['Nome Completo']
             dados_colab = row.to_dict()
             
-            # Dados de faltas/baixas
             if not df_faltas_baixas.empty:
                 df_colab_faltas = df_faltas_baixas[df_faltas_baixas['Nome Completo'] == nome]
                 
@@ -1088,7 +1107,6 @@ def carregar_dados_completos_relatorio(empresa, ano, mes, filtros):
                 dados_colab['Total Baixas (dias)'] = 0
                 dados_colab['Total Faltas+Baixas'] = 0
             
-            # Dados de horas extras
             if not df_horas_extras.empty:
                 df_colab_extras = df_horas_extras[df_horas_extras['Nome Completo'] == nome]
                 
@@ -1127,11 +1145,9 @@ def gerar_relatorio_excel(empresa, ano, mes, campos_selecionados, filtros):
         if df_completo is None or df_completo.empty:
             return None
         
-        # Selecionar apenas campos escolhidos
         campos_disponiveis = [c for c in campos_selecionados if c in df_completo.columns]
         df_relatorio = df_completo[campos_disponiveis].copy()
         
-        # Criar Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_relatorio.to_excel(writer, sheet_name='Relatório', index=False)
@@ -1139,13 +1155,11 @@ def gerar_relatorio_excel(empresa, ano, mes, campos_selecionados, filtros):
             workbook = writer.book
             worksheet = writer.sheets['Relatório']
             
-            # Header styling
             for cell in worksheet[1]:
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Auto-ajustar largura das colunas
             for column in worksheet.columns:
                 max_length = 0
                 column_letter = column[0].column_letter
@@ -1184,13 +1198,66 @@ def eliminar_template(nome):
         return True
     return False
 
+# ==================== FUNÇÕES AUXILIARES PARA FILTROS ====================
+
+def sync_filtros_from_sidebar(prefix):
+    """Sincroniza filtros do sidebar para session_state"""
+    if f"{prefix}_emp" in st.session_state:
+        st.session_state.empresa_selecionada = st.session_state[f"{prefix}_emp"]
+    if f"{prefix}_mes" in st.session_state:
+        st.session_state.mes_selecionado = st.session_state[f"{prefix}_mes"]
+    if f"{prefix}_ano" in st.session_state:
+        st.session_state.ano_selecionado = st.session_state[f"{prefix}_ano"]
+
+def criar_filtros_padrao(prefix, incluir_colaborador=True):
+    """Cria filtros padrão consistentes"""
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada in EMPRESAS else 0
+        emp = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, 
+                          key=f"{prefix}_emp", on_change=lambda: sync_filtros_from_sidebar(prefix))
+        st.session_state.empresa_selecionada = emp
+    
+    with col2:
+        mes = st.selectbox("Mês", list(range(1, 13)),
+                          format_func=lambda x: calendar.month_name[x],
+                          index=st.session_state.mes_selecionado - 1, 
+                          key=f"{prefix}_mes", on_change=lambda: sync_filtros_from_sidebar(prefix))
+        st.session_state.mes_selecionado = mes
+    
+    with col3:
+        ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
+        ano = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, 
+                          key=f"{prefix}_ano", on_change=lambda: sync_filtros_from_sidebar(prefix))
+        st.session_state.ano_selecionado = ano
+    
+    if incluir_colaborador:
+        colabs = carregar_colaboradores_ativos(emp, ano, mes)
+        
+        if colabs:
+            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs:
+                colab_idx = colabs.index(st.session_state.colaborador_selecionado)
+            else:
+                colab_idx = 0
+                st.session_state.colaborador_selecionado = colabs[0]
+            
+            colab = st.selectbox("Colaborador", colabs, index=colab_idx, key=f"{prefix}_col")
+            st.session_state.colaborador_selecionado = colab
+            
+            return emp, mes, ano, colab
+        else:
+            return emp, mes, ano, None
+    
+    return emp, mes, ano
+
 # ==================== INTERFACE ====================
 
 if not check_password():
     st.stop()
 
-st.title("💰 Processamento Salarial v3.2")
-st.caption("✨ NOVO: Eliminar registos + Templates + Filtros Mês/Ano + Campos Processamento")
+st.title("💰 Processamento Salarial v3.3")
+st.caption("✨ v3.3: Base IRS corrigida + Campos segmentados + Filtros persistentes")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -1224,35 +1291,10 @@ if menu == "⚙️ Configurações":
     with tab2:
         st.subheader("👥 Editar Dados dos Colaboradores")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-            emp = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_cfg")
-            st.session_state.empresa_selecionada = emp
-        with col2:
-            mes_cfg = st.selectbox("Mês", list(range(1, 13)), 
-                                 format_func=lambda x: calendar.month_name[x],
-                                 index=st.session_state.mes_selecionado - 1, key="mes_cfg")
-            st.session_state.mes_selecionado = mes_cfg
-        with col3:
-            ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-            ano_cfg = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, key="ano_cfg")
-            st.session_state.ano_selecionado = ano_cfg
+        emp, mes, ano, colab = criar_filtros_padrao("cfg", incluir_colaborador=True)
         
-        colabs = carregar_colaboradores_ativos(emp)
-        
-        if colabs:
-            st.success(f"✅ {len(colabs)} colaboradores ativos")
-            
-            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs:
-                colab_idx = colabs.index(st.session_state.colaborador_selecionado)
-            else:
-                colab_idx = 0
-            
-            colab_sel = st.selectbox("Colaborador", colabs, index=colab_idx, key="col_cfg")
-            st.session_state.colaborador_selecionado = colab_sel
-            
-            snap = carregar_ultimo_snapshot(emp, colab_sel, ano_cfg, mes_cfg)
+        if colab:
+            snap = carregar_ultimo_snapshot(emp, colab, ano, mes)
             
             if snap:
                 st.markdown("---")
@@ -1358,7 +1400,7 @@ if menu == "⚙️ Configurações":
                             excel_file = download_excel(emp)
                             wb = load_workbook(excel_file, data_only=False)
                             
-                            mask = df_base['Nome Completo'] == colab_sel
+                            mask = df_base['Nome Completo'] == colab
                             df_base.loc[mask, 'Salário Bruto'] = novo_salario
                             df_base.loc[mask, 'Subsídio Alimentação Diário'] = novo_sub
                             df_base.loc[mask, 'Número Pingo Doce'] = novo_num
@@ -1397,33 +1439,10 @@ if menu == "⚙️ Configurações":
     with tab3:
         st.subheader("⏰ Mudanças de Horário")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            emp_idx_hor = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-            emp_hor = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_hor, key="emp_hor")
-            st.session_state.empresa_selecionada = emp_hor
-        with col2:
-            mes_hor = st.selectbox("Mês", list(range(1, 13)),
-                                  format_func=lambda x: calendar.month_name[x],
-                                  index=st.session_state.mes_selecionado - 1, key="mes_hor")
-            st.session_state.mes_selecionado = mes_hor
-        with col3:
-            ano_idx_hor = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-            ano_hor = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_hor, key="ano_hor")
-            st.session_state.ano_selecionado = ano_hor
+        emp, mes, ano, colab = criar_filtros_padrao("hor", incluir_colaborador=True)
         
-        colabs_hor = carregar_colaboradores_ativos(emp_hor)
-        
-        if colabs_hor:
-            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_hor:
-                colab_idx_hor = colabs_hor.index(st.session_state.colaborador_selecionado)
-            else:
-                colab_idx_hor = 0
-            
-            colab_hor = st.selectbox("Colaborador", colabs_hor, index=colab_idx_hor, key="col_hor")
-            st.session_state.colaborador_selecionado = colab_hor
-            
-            snap_hor = carregar_ultimo_snapshot(emp_hor, colab_hor, ano_hor, mes_hor)
+        if colab:
+            snap_hor = carregar_ultimo_snapshot(emp, colab, ano, mes)
             
             if snap_hor:
                 st.markdown("---")
@@ -1464,11 +1483,11 @@ if menu == "⚙️ Configurações":
                         if novas_horas == horas_atuais:
                             st.warning("⚠️ As horas não foram alteradas!")
                         else:
-                            df_base = carregar_dados_base(emp_hor)
-                            excel_file = download_excel(emp_hor)
+                            df_base = carregar_dados_base(emp)
+                            excel_file = download_excel(emp)
                             wb = load_workbook(excel_file, data_only=False)
                             
-                            mask = df_base['Nome Completo'] == colab_hor
+                            mask = df_base['Nome Completo'] == colab
                             df_base.loc[mask, 'Nº Horas/Semana'] = novas_horas
                             
                             if "Colaboradores" in wb.sheetnames:
@@ -1481,7 +1500,7 @@ if menu == "⚙️ Configurações":
                             for r in dataframe_to_rows(df_base, index=False, header=True):
                                 ws.append(r)
                             
-                            if upload_excel_seguro(emp_hor, wb):
+                            if upload_excel_seguro(emp, wb):
                                 st.success("✅ Horário atualizado!")
                                 st.balloons()
                                 time.sleep(2)
@@ -1492,37 +1511,14 @@ if menu == "⚙️ Configurações":
     with tab4:
         st.subheader("📋 Dados IRS")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            emp_idx_irs = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-            emp_irs = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_irs, key="emp_irs")
-            st.session_state.empresa_selecionada = emp_irs
-        with col2:
-            mes_irs = st.selectbox("Mês", list(range(1, 13)),
-                                  format_func=lambda x: calendar.month_name[x],
-                                  index=st.session_state.mes_selecionado - 1, key="mes_irs")
-            st.session_state.mes_selecionado = mes_irs
-        with col3:
-            ano_idx_irs = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-            ano_irs = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_irs, key="ano_irs")
-            st.session_state.ano_selecionado = ano_irs
+        emp, mes, ano, colab = criar_filtros_padrao("irs", incluir_colaborador=True)
         
-        colabs_irs = carregar_colaboradores_ativos(emp_irs)
-        
-        if colabs_irs:
-            if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_irs:
-                colab_idx_irs = colabs_irs.index(st.session_state.colaborador_selecionado)
-            else:
-                colab_idx_irs = 0
-            
-            colab_irs = st.selectbox("Colaborador", colabs_irs, index=colab_idx_irs, key="col_irs")
-            st.session_state.colaborador_selecionado = colab_irs
-            
-            snap_irs = carregar_ultimo_snapshot(emp_irs, colab_irs, ano_irs, mes_irs)
+        if colab:
+            snap_irs = carregar_ultimo_snapshot(emp, colab, ano, mes)
             
             if snap_irs:
                 with st.form("form_irs"):
-                    st.markdown(f"### {colab_irs}")
+                    st.markdown(f"### {colab}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
@@ -1546,11 +1542,11 @@ if menu == "⚙️ Configurações":
                     submit_irs = st.form_submit_button("💾 GUARDAR", use_container_width=True, type="primary")
                     
                     if submit_irs:
-                        df_base = carregar_dados_base(emp_irs)
-                        excel_file = download_excel(emp_irs)
+                        df_base = carregar_dados_base(emp)
+                        excel_file = download_excel(emp)
                         wb = load_workbook(excel_file, data_only=False)
                         
-                        mask = df_base['Nome Completo'] == colab_irs
+                        mask = df_base['Nome Completo'] == colab
                         df_base.loc[mask, 'Estado Civil'] = estado_civil
                         df_base.loc[mask, 'Nº Titulares'] = num_titulares
                         df_base.loc[mask, 'Nº Dependentes'] = num_dependentes
@@ -1568,7 +1564,7 @@ if menu == "⚙️ Configurações":
                         for r in dataframe_to_rows(df_base, index=False, header=True):
                             ws.append(r)
                         
-                        if upload_excel_seguro(emp_irs, wb):
+                        if upload_excel_seguro(emp, wb):
                             st.success("✅ Dados IRS atualizados!")
                             st.balloons()
                             time.sleep(2)
@@ -1581,7 +1577,7 @@ if menu == "⚙️ Configurações":
         
         col1, col2 = st.columns(2)
         with col1:
-            emp_idx_status = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
+            emp_idx_status = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada in EMPRESAS else 0
             emp_status = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx_status, key="emp_status")
             st.session_state.empresa_selecionada = emp_status
         with col2:
@@ -1643,38 +1639,13 @@ if menu == "⚙️ Configurações":
 elif menu == "💼 Processar Salários":
     st.header("💼 Processamento Mensal")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-        emp_proc = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_proc")
-        st.session_state.empresa_selecionada = emp_proc
-    with col2:
-        mes_proc = st.selectbox("Mês", list(range(1, 13)),
-                               format_func=lambda x: calendar.month_name[x],
-                               index=st.session_state.mes_selecionado - 1, key="mes_proc")
-        st.session_state.mes_selecionado = mes_proc
-    with col3:
-        ano_idx = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-        ano_proc = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx, key="ano_proc")
-        st.session_state.ano_selecionado = ano_proc
+    emp, mes, ano, colab = criar_filtros_padrao("proc", incluir_colaborador=True)
     
-    colabs_proc = carregar_colaboradores_ativos(emp_proc)
-    
-    if not colabs_proc:
+    if not colab:
         st.warning("⚠️ Nenhum colaborador ativo")
         st.stop()
     
-    st.success(f"✅ {len(colabs_proc)} colaboradores ativos")
-    
-    if st.session_state.colaborador_selecionado and st.session_state.colaborador_selecionado in colabs_proc:
-        colab_idx = colabs_proc.index(st.session_state.colaborador_selecionado)
-    else:
-        colab_idx = 0
-    
-    colab_proc = st.selectbox("Colaborador", colabs_proc, index=colab_idx, key="col_proc")
-    st.session_state.colaborador_selecionado = colab_proc
-    
-    snap_proc = carregar_ultimo_snapshot(emp_proc, colab_proc, ano_proc, mes_proc)
+    snap_proc = carregar_ultimo_snapshot(emp, colab, ano, mes)
     
     if not snap_proc:
         st.error("❌ Erro ao carregar")
@@ -1686,7 +1657,7 @@ elif menu == "💼 Processar Salários":
     vencimento_hora = float(snap_proc['Vencimento Hora'])
     
     feriados = FERIADOS_NACIONAIS_2025 + st.session_state.feriados_municipais
-    dias_uteis_mes = calcular_dias_uteis(ano_proc, mes_proc, feriados)
+    dias_uteis_mes = calcular_dias_uteis(ano, mes, feriados)
     
     st.markdown("---")
     
@@ -1735,7 +1706,7 @@ elif menu == "💼 Processar Salários":
                     st.error("❌ Data de início deve ser anterior à data de fim!")
                 else:
                     with st.spinner("A registar..."):
-                        if gravar_falta_baixa(emp_proc, ano_proc, mes_proc, colab_proc, 
+                        if gravar_falta_baixa(emp, ano, mes, colab, 
                                             "Falta", data_inicio_falta, data_fim_falta, obs_falta):
                             st.success("✅ Falta registada!")
                             time.sleep(1)
@@ -1768,12 +1739,12 @@ elif menu == "💼 Processar Salários":
                         
                         if ficheiro_baixa:
                             st.info("📤 A fazer upload...")
-                            ficheiro_path = upload_ficheiro_baixa(emp_proc, ano_proc, mes_proc, 
-                                                                 colab_proc, ficheiro_baixa)
+                            ficheiro_path = upload_ficheiro_baixa(emp, ano, mes, 
+                                                                 colab, ficheiro_baixa)
                             if ficheiro_path:
                                 st.success(f"✅ Documento guardado")
                         
-                        if gravar_falta_baixa(emp_proc, ano_proc, mes_proc, colab_proc,
+                        if gravar_falta_baixa(emp, ano, mes, colab,
                                             "Baixa", data_inicio_baixa, data_fim_baixa, 
                                             obs_baixa, ficheiro_path):
                             st.success("✅ Baixa registada!")
@@ -1783,7 +1754,7 @@ elif menu == "💼 Processar Salários":
     with tab_historico:
         st.markdown("### 📜 Histórico do Mês")
         
-        df_historico = carregar_faltas_baixas(emp_proc, ano_proc, mes_proc, colab_proc)
+        df_historico = carregar_faltas_baixas(emp, ano, mes, colab)
         
         if not df_historico.empty:
             for idx, row in df_historico.iterrows():
@@ -1805,7 +1776,7 @@ elif menu == "💼 Processar Salários":
                         st.caption(f"📝 {row['Observações']}")
                 with col7:
                     if st.button("🗑️", key=f"del_fb_{idx}", help="Eliminar registo"):
-                        if eliminar_registo_falta_baixa(emp_proc, ano_proc, mes_proc, idx):
+                        if eliminar_registo_falta_baixa(emp, ano, mes, idx):
                             time.sleep(1)
                             st.rerun()
                 
@@ -1824,7 +1795,7 @@ elif menu == "💼 Processar Salários":
     st.markdown("---")
     
     # CALCULAR DIAS ÚTEIS TRABALHADOS
-    df_historico = carregar_faltas_baixas(emp_proc, ano_proc, mes_proc, colab_proc)
+    df_historico = carregar_faltas_baixas(emp, ano, mes, colab)
     
     if not df_historico.empty:
         total_faltas_uteis = int(df_historico[df_historico['Tipo'] == 'Falta']['Dias Úteis'].sum())
@@ -1868,7 +1839,7 @@ elif menu == "💼 Processar Salários":
                     st.warning("⚠️ Nenhum valor preenchido!")
                 else:
                     with st.spinner("A registar..."):
-                        if gravar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc,
+                        if gravar_horas_extras(emp, ano, mes, colab,
                                               h_not, h_dom, h_fer, h_ext, outros_prov, obs_extras):
                             st.success("✅ Extras registados!")
                             time.sleep(1)
@@ -1877,7 +1848,7 @@ elif menu == "💼 Processar Salários":
     with tab_historico_extras:
         st.markdown("### 📜 Histórico de Extras")
         
-        df_extras = carregar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc)
+        df_extras = carregar_horas_extras(emp, ano, mes, colab)
         
         if not df_extras.empty:
             for idx, row in df_extras.iterrows():
@@ -1900,7 +1871,7 @@ elif menu == "💼 Processar Salários":
                         st.caption(f"📝 {row['Observações']}")
                 with col8:
                     if st.button("🗑️", key=f"del_ext_{idx}", help="Eliminar registo"):
-                        if eliminar_registo_horas_extras(emp_proc, ano_proc, mes_proc, idx):
+                        if eliminar_registo_horas_extras(emp, ano, mes, idx):
                             time.sleep(1)
                             st.rerun()
                 
@@ -1918,7 +1889,7 @@ elif menu == "💼 Processar Salários":
     st.markdown("---")
     
     # CARREGAR VALORES DO HISTÓRICO
-    df_extras_total = carregar_horas_extras(emp_proc, ano_proc, mes_proc, colab_proc)
+    df_extras_total = carregar_horas_extras(emp, ano, mes, colab)
     
     if not df_extras_total.empty:
         h_not_total = float(df_extras_total['Horas Noturnas'].sum())
@@ -2055,27 +2026,13 @@ elif menu == "💼 Processar Salários":
 elif menu == "👥 Visão FTEs/Secção":
     st.header("👥 Visão de FTEs por Secção")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-        emp_ftes = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_ftes")
-        st.session_state.empresa_selecionada = emp_ftes
-    with col2:
-        mes_ftes = st.selectbox("Mês", list(range(1, 13)),
-                               format_func=lambda x: calendar.month_name[x],
-                               index=st.session_state.mes_selecionado - 1, key="mes_ftes")
-        st.session_state.mes_selecionado = mes_ftes
-    with col3:
-        ano_idx_ftes = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-        ano_ftes = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_ftes, key="ano_ftes")
-        st.session_state.ano_selecionado = ano_ftes
+    emp, mes, ano = criar_filtros_padrao("ftes", incluir_colaborador=False)
     
     st.markdown("---")
     
-    stats = calcular_ftes_e_estatisticas(emp_ftes, ano_ftes, mes_ftes)
+    stats = calcular_ftes_e_estatisticas(emp, ano, mes)
     
     if stats:
-        # Métricas principais no topo
         col1, col2 = st.columns(2)
         with col1:
             st.metric("👥 Total de Colaboradores Ativos", stats['total_colaboradores'])
@@ -2086,7 +2043,6 @@ elif menu == "👥 Visão FTEs/Secção":
         
         st.markdown("---")
         
-        # Tabela por secção
         st.subheader("📋 Detalhes por Secção")
         
         df_display = stats['df_stats'].copy()
@@ -2108,14 +2064,11 @@ elif menu == "👥 Visão FTEs/Secção":
         
         st.markdown("---")
         
-        # Gráficos com filtro de secção
         st.subheader("📊 Visualizações")
         
-        # Filtro de secção
         seccoes_disponiveis = ['Todas'] + sorted(df_display['Secção'].unique().tolist())
         seccao_filtro = st.selectbox("🔍 Filtrar por Secção", seccoes_disponiveis, key="filtro_seccao_viz")
         
-        # Aplicar filtro
         if seccao_filtro != 'Todas':
             df_viz = df_display[df_display['Secção'] == seccao_filtro].copy()
         else:
@@ -2141,25 +2094,11 @@ elif menu == "👥 Visão FTEs/Secção":
 elif menu == "📊 Output":
     st.header("📊 Exportação de Relatórios")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        emp_idx = list(EMPRESAS.keys()).index(st.session_state.empresa_selecionada) if st.session_state.empresa_selecionada and st.session_state.empresa_selecionada in EMPRESAS else 0
-        emp_output = st.selectbox("Empresa", list(EMPRESAS.keys()), index=emp_idx, key="emp_output")
-        st.session_state.empresa_selecionada = emp_output
-    with col2:
-        mes_output = st.selectbox("Mês", list(range(1, 13)),
-                                 format_func=lambda x: calendar.month_name[x],
-                                 index=st.session_state.mes_selecionado - 1, key="mes_output")
-        st.session_state.mes_selecionado = mes_output
-    with col3:
-        ano_idx_output = [2024, 2025, 2026].index(st.session_state.ano_selecionado) if st.session_state.ano_selecionado in [2024, 2025, 2026] else 1
-        ano_output = st.selectbox("Ano", [2024, 2025, 2026], index=ano_idx_output, key="ano_output")
-        st.session_state.ano_selecionado = ano_output
+    emp, mes, ano = criar_filtros_padrao("output", incluir_colaborador=False)
     
     st.markdown("---")
     
-    # Carregar dados completos
-    df_completo = carregar_dados_completos_relatorio(emp_output, ano_output, mes_output, {})
+    df_completo = carregar_dados_completos_relatorio(emp, ano, mes, {})
     
     if df_completo is None or df_completo.empty:
         st.warning("⚠️ Sem dados disponíveis")
@@ -2220,43 +2159,56 @@ elif menu == "📊 Output":
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.markdown("### 📋 Selecionar Campos")
-        
-        # Campos disponíveis (todos os campos do df_completo)
-        campos_disponiveis = list(df_completo.columns)
-        
-        # Campos básicos pré-selecionados
-        campos_basicos = ['Nome Completo', 'Status', 'Secção', 'Salário Bruto', 
-                         'Nº Horas/Semana', 'Data de Admissão']
+        st.markdown("### 📋 Selecionar Campos por Categoria")
         
         # Verificar se há template carregado
+        campos_pre_selecionados = []
         if 'campos_template_carregado' in st.session_state:
             nome_template_carregado = st.session_state.campos_template_carregado
-            campos_default = carregar_template(nome_template_carregado)
+            campos_pre_selecionados = carregar_template(nome_template_carregado)
             st.info(f"📥 Template carregado: **{nome_template_carregado}**")
             del st.session_state.campos_template_carregado
-        else:
-            campos_default = [c for c in campos_basicos if c in campos_disponiveis]
         
-        campos_selecionados = st.multiselect(
-            "Campos a incluir no relatório",
-            options=campos_disponiveis,
-            default=campos_default,
-            help="Selecione os campos que deseja exportar",
-            key="campos_selecionados_output"
-        )
+        campos_selecionados = []
+        
+        # Iterar por cada categoria
+        for categoria, campos_categoria in CATEGORIAS_CAMPOS.items():
+            with st.expander(categoria, expanded=False):
+                # Filtrar campos disponíveis na categoria
+                campos_disponiveis = [c for c in campos_categoria if c in df_completo.columns]
+                
+                if campos_disponiveis:
+                    # Determinar campos default para esta categoria
+                    if campos_pre_selecionados:
+                        campos_default = [c for c in campos_disponiveis if c in campos_pre_selecionados]
+                    else:
+                        # Se não há template, pré-selecionar alguns campos básicos
+                        campos_basicos = ['Nome Completo', 'Status', 'Secção', 'Salário Bruto']
+                        campos_default = [c for c in campos_disponiveis if c in campos_basicos]
+                    
+                    # Multiselect para cada categoria
+                    campos_cat = st.multiselect(
+                        f"Campos de {categoria}",
+                        options=campos_disponiveis,
+                        default=campos_default,
+                        key=f"campos_{categoria}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    campos_selecionados.extend(campos_cat)
+        
+        # Salvar no session_state
+        st.session_state.campos_selecionados_output = campos_selecionados
     
     with col2:
         st.markdown("### 🔍 Filtros")
         
-        # Filtro de status
         status_filtro = st.selectbox(
             "Status",
             ["Todos", "Ativo", "Inativo"],
             help="Filtrar por status do colaborador"
         )
         
-        # Filtro de secção
         seccoes = ['Todas'] + sorted(df_completo['Secção'].dropna().unique().tolist())
         seccao_filtro = st.selectbox(
             "Secção",
@@ -2264,7 +2216,6 @@ elif menu == "📊 Output":
             help="Filtrar por secção"
         )
         
-        # Formato de saída
         formato = st.radio(
             "Formato",
             ["Excel (.xlsx)"],
@@ -2285,18 +2236,15 @@ elif menu == "📊 Output":
         if seccao_filtro != "Todas":
             df_preview = df_preview[df_preview['Secção'] == seccao_filtro]
         
-        # Selecionar campos
         campos_preview = [c for c in campos_selecionados if c in df_preview.columns]
         df_preview = df_preview[campos_preview]
         
-        # Preview
         with st.expander("👁️ PREVIEW DOS DADOS", expanded=True):
             st.dataframe(df_preview, use_container_width=True, hide_index=True)
             st.caption(f"📊 {len(df_preview)} registos | {len(campos_preview)} campos")
         
         st.markdown("---")
         
-        # Botão de exportação
         col1, col2, col3 = st.columns([1, 1, 1])
         
         with col2:
@@ -2308,12 +2256,12 @@ elif menu == "📊 Output":
                     }
                     
                     if formato == "Excel (.xlsx)":
-                        output = gerar_relatorio_excel(emp_output, ano_output, mes_output, 
+                        output = gerar_relatorio_excel(emp, ano, mes, 
                                                       campos_selecionados, filtros)
                         
                         if output:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            nome_ficheiro = f"relatorio_{emp_output.replace(' ', '_')}_{ano_output}_{mes_output:02d}_{timestamp}.xlsx"
+                            nome_ficheiro = f"relatorio_{emp.replace(' ', '_')}_{ano}_{mes:02d}_{timestamp}.xlsx"
                             
                             st.success("✅ Relatório gerado com sucesso!")
                             
@@ -2347,12 +2295,11 @@ elif menu == "📈 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v3.2 🚀 ATUALIZAÇÕES
-🗑️ Eliminar registos individuais
-📁 Templates de relatórios
-🔍 Filtros Mês/Ano completos
-📊 Campos processamento em Output
-🎯 Filtro secção em visualizações
+st.sidebar.info(f"""v3.3 🚀 ATUALIZAÇÕES
+✅ Base IRS corrigida
+📋 Campos segmentados por categoria
+🔄 Filtros persistentes entre módulos
+🎯 Melhor organização
 """)
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
