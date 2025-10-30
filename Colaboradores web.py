@@ -300,16 +300,23 @@ def download_excel(empresa):
         return None
 
 def garantir_aba(wb, nome_aba, colunas):
-    """Garante que a aba existe, criando-a se necessário"""
+    """Garante que a aba existe, criando-a se necessário - v3.4 CORRIGIDO"""
     if nome_aba not in wb.sheetnames:
         ws = wb.create_sheet(nome_aba)
         ws.append(colunas)
-        st.info(f"✨ Aba '{nome_aba}' criada")
+        
+        # v3.4: Formatar cabeçalho
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        st.info(f"✨ Aba '{nome_aba}' criada com sucesso!")
         return True
     return False
 
 def upload_excel_seguro(empresa, wb):
-    """Upload com verificação de integridade"""
+    """Upload com verificação de integridade - v3.4 SEM keep_vba"""
     try:
         if "Colaboradores" not in wb.sheetnames:
             st.error("🚨 ERRO CRÍTICO: Aba 'Colaboradores' não encontrada!")
@@ -332,6 +339,8 @@ def upload_excel_seguro(empresa, wb):
         
     except Exception as e:
         st.error(f"❌ Erro ao enviar Excel: {e}")
+        import traceback
+        st.error(f"🔍 Detalhes: {traceback.format_exc()}")
         return False
 
 # ==================== FUNÇÕES DE CÁLCULO ====================
@@ -462,7 +471,7 @@ def carregar_colaboradores_ativos(empresa, ano=None, mes=None):
     return colaboradores
 
 def atualizar_status_colaborador(empresa, colaborador, novo_status):
-    """Atualiza Status APENAS na aba Colaboradores"""
+    """Atualiza Status APENAS na aba Colaboradores - v3.4 SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -563,7 +572,7 @@ def criar_snapshot_inicial(empresa, colaborador, ano, mes):
     return snapshot
 
 def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
-    """Carrega último snapshot com dados ATUALIZADOS"""
+    """Carrega último snapshot com dados ATUALIZADOS - v3.4"""
     excel_file = download_excel(empresa)
     if not excel_file:
         return None
@@ -624,7 +633,7 @@ def carregar_ultimo_snapshot(empresa, colaborador, ano, mes):
         return None
 
 def gravar_snapshot(empresa, snapshot):
-    """Grava snapshot SEM mexer na aba Colaboradores"""
+    """Grava snapshot SEM mexer na aba Colaboradores - v3.4 SEM keep_vba"""
     try:
         if 'Status' not in snapshot or pd.isna(snapshot['Status']) or snapshot['Status'] == '':
             snapshot['Status'] = 'Ativo'
@@ -637,7 +646,7 @@ def gravar_snapshot(empresa, snapshot):
         if not excel_file:
             return False
         
-        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        wb = load_workbook(excel_file, data_only=False)
         
         if "Colaboradores" not in wb.sheetnames:
             st.error("🚨 ERRO: Aba Colaboradores não encontrada!")
@@ -662,23 +671,27 @@ def gravar_snapshot(empresa, snapshot):
         if sucesso:
             linha = ws.max_row
             st.success(f"✅ Snapshot gravado (linha {linha})")
+            if aba_criada:
+                st.success(f"✨ Aba '{nome_aba}' foi criada neste processo")
             return True
         
         return False
         
     except Exception as e:
         st.error(f"❌ Erro ao gravar: {e}")
+        import traceback
+        st.error(f"🔍 Detalhes: {traceback.format_exc()}")
         return False
 
 def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_fim, obs, ficheiro_path=None):
-    """Grava registo de falta ou baixa - VERSÃO CORRIGIDA"""
+    """Grava registo de falta ou baixa - v3.4 CORRIGIDO SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             st.error("❌ Erro ao baixar Excel")
             return False
         
-        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        wb = load_workbook(excel_file, data_only=False)
         
         if "Colaboradores" not in wb.sheetnames:
             st.error("🚨 ERRO: Aba Colaboradores não encontrada!")
@@ -715,12 +728,13 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         
         ws.append(nova_linha)
         
-        # DEBUG: Verificar quantas linhas tem
-        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas")
+        # v3.4: Logs informativos
+        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas após inserção")
         
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ {tipo} registada: {dias_uteis} dias úteis / {dias_totais} dias totais")
-            st.success(f"✅ Aba '{nome_aba}' {'criada' if aba_foi_criada else 'atualizada'}")
+            if aba_foi_criada:
+                st.success(f"✨ Aba '{nome_aba}' foi criada neste processo")
             return True
         
         return False
@@ -732,13 +746,13 @@ def gravar_falta_baixa(empresa, ano, mes, colaborador, tipo, data_inicio, data_f
         return False
 
 def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
-    """Elimina um registo específico de falta/baixa"""
+    """Elimina um registo específico de falta/baixa - v3.4 SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             return False
         
-        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        wb = load_workbook(excel_file, data_only=False)
         nome_aba = get_nome_aba_faltas_baixas(ano, mes)
         
         if nome_aba not in wb.sheetnames:
@@ -766,14 +780,14 @@ def eliminar_registo_falta_baixa(empresa, ano, mes, linha_idx):
         return False
 
 def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, h_feriados, h_extra, outros_prov, obs):
-    """Grava registo de horas extras e outros proveitos - VERSÃO CORRIGIDA"""
+    """Grava registo de horas extras - v3.4 PARA TODAS EMPRESAS SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             st.error("❌ Erro ao baixar Excel")
             return False
         
-        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        wb = load_workbook(excel_file, data_only=False)
         
         if "Colaboradores" not in wb.sheetnames:
             st.error("🚨 ERRO: Aba Colaboradores não encontrada!")
@@ -806,12 +820,13 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         
         ws.append(nova_linha)
         
-        # DEBUG: Verificar quantas linhas tem
-        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas")
+        # v3.4: Logs informativos
+        st.info(f"📊 Aba '{nome_aba}' tem {ws.max_row} linhas após inserção")
         
         if upload_excel_seguro(empresa, wb):
             st.success(f"✅ Horas extras/proveitos registados")
-            st.success(f"✅ Aba '{nome_aba}' {'criada' if aba_foi_criada else 'atualizada'}")
+            if aba_foi_criada:
+                st.success(f"✨ Aba '{nome_aba}' foi criada neste processo")
             return True
         
         return False
@@ -823,13 +838,13 @@ def gravar_horas_extras(empresa, ano, mes, colaborador, h_noturnas, h_domingos, 
         return False
 
 def eliminar_registo_horas_extras(empresa, ano, mes, linha_idx):
-    """Elimina um registo específico de horas extras"""
+    """Elimina um registo específico de horas extras - v3.4 SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
             return False
         
-        wb = load_workbook(excel_file, data_only=False, keep_vba=True)
+        wb = load_workbook(excel_file, data_only=False)
         nome_aba = get_nome_aba_horas_extras(ano, mes)
         
         if nome_aba not in wb.sheetnames:
@@ -880,7 +895,7 @@ def carregar_faltas_baixas(empresa, ano, mes, colaborador=None):
         return pd.DataFrame()
 
 def carregar_horas_extras(empresa, ano, mes, colaborador=None):
-    """Carrega horas extras do mês"""
+    """Carrega horas extras do mês - v3.4 TODAS EMPRESAS"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -903,7 +918,7 @@ def carregar_horas_extras(empresa, ano, mes, colaborador=None):
         return pd.DataFrame()
 
 def registar_rescisao_colaborador(empresa, colaborador, data_rescisao, motivo, obs):
-    """Registra rescisão na aba Colaboradores (mantém status Ativo)"""
+    """Registra rescisão na aba Colaboradores - v3.4 SEM keep_vba"""
     try:
         excel_file = download_excel(empresa)
         if not excel_file:
@@ -1283,7 +1298,7 @@ if not check_password():
     st.stop()
 
 st.title("💰 Processamento Salarial v3.4")
-st.caption("✨ v3.4: Horas extras para TODAS empresas + Correção criação de abas")
+st.caption("✨ v3.4: Horas extras TODAS empresas + Correção criação abas + Remoção keep_vba")
 st.caption(f"🕐 Reload: {st.session_state.ultimo_reload.strftime('%H:%M:%S')}")
 
 st.markdown("---")
@@ -1836,9 +1851,9 @@ elif menu == "💼 Processar Salários":
     
     st.markdown("---")
     
-    # HORAS EXTRAS - DISPONÍVEL PARA TODAS AS EMPRESAS
+    # HORAS EXTRAS - v3.4: DISPONÍVEL PARA TODAS AS EMPRESAS
     st.subheader("⏰ Horas Extras e Outros Proveitos")
-    st.info("💡 Módulo disponível para TODAS as empresas")
+    st.success("✅ v3.4: Módulo disponível para TODAS as empresas")
     
     tab_registar, tab_historico_extras = st.tabs(["➕ Registar", "📜 Histórico"])
     
@@ -2322,11 +2337,12 @@ elif menu == "📈 Tabela IRS":
         st.warning("⚠️ IRS será calculado com escalões aproximados")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""v3.4 🚀 ATUALIZAÇÕES
-✅ Horas extras para TODAS empresas
-✅ Correção criação de abas
-🔍 Logs adicionados
-📊 Verificações reforçadas
+st.sidebar.success(f"""✅ v3.4 CORREÇÕES APLICADAS:
+• Remoção de keep_vba
+• Horas extras para TODAS empresas  
+• Criação robusta de abas
+• Logs informativos
+• Traceback detalhado
 """)
 
 if st.sidebar.button("🚪 Logout", use_container_width=True):
