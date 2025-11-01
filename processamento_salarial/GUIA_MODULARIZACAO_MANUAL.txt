@@ -1,0 +1,78 @@
+# GUIA DE MODULARIZAÇÃO MANUAL
+# ==============================
+
+# Este arquivo contém instruções para completar a modularização manualmente.
+
+# ESTRUTURA CRIADA:
+# -----------------
+# processamento_salarial/
+#   ├── config/          ← Configurações
+#   ├── auth/            ← Autenticação
+#   ├── database/        ← Dropbox + Excel
+#   ├── calculations/    ← Cálculos
+#   ├── business_logic/  ← Lógica de negócio
+#   ├── ui/              ← Interface
+#   └── utils/           ← Utilitários
+
+# PRÓXIMOS PASSOS:
+# ----------------
+
+# 1. CONFIG/SETTINGS.PY
+# ---------------------
+# Copiar para cá:
+# - EMPRESAS = {...}
+# - FERIADOS_NACIONAIS_2025 = [...]
+# - SALARIO_MINIMO = ...
+# - COLUNAS_SNAPSHOT = [...]
+# - Todas as constantes e configurações
+
+# 2. AUTH/AUTHENTICATION.PY
+# --------------------------
+# Copiar para cá:
+# - def check_password():
+# - Funções de login/logout
+
+# 3. DATABASE/DROPBOX_MANAGER.PY
+# -------------------------------
+# Copiar para cá:
+# - Funções get_dropbox_client()
+# - Funções upload/download Dropbox
+# - Gestão de ficheiros
+
+# 4. CALCULATIONS/SALARY_CALCULATOR.PY
+# -------------------------------------
+# Copiar para cá:
+# - Funções calcular_vencimento*
+# - Funções calcular_subsidio*
+# - Cálculos de salário
+
+# 5. CALCULATIONS/IRS_CALCULATOR.PY
+# ----------------------------------
+# Copiar para cá:
+# - Funções calcular_irs*
+# - Tabela IRS
+# - Lógica de retenção
+
+# 6. UI/PAGE_CONFIGURACOES.PY
+# ----------------------------
+# Copiar para cá:
+# - Código do elif menu == "⚙️ Configurações"
+# - Criar função: def render_configuracoes()
+
+# 7. UI/PAGE_PROCESSAR.PY
+# ------------------------
+# Copiar para cá:
+# - Código do elif menu == "💼 Processar Salários"
+# - Criar função: def render_processar()
+
+# 8. UI/PAGE_OUTPUT.PY
+# --------------------
+# Copiar para cá:
+# - Código do elif menu == "📊 Output"
+# - Criar função: def render_output()
+
+# 9. MAIN.PY (CRIAR NA RAIZ)
+# ---------------------------
+# Ver exemplo completo em EXEMPLO_main.py
+
+# DICA: Consulta GUIA_MODULARIZACAO_COMPLETO.md para detalhes!
